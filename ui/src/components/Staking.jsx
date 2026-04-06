@@ -30,11 +30,11 @@ export default function Staking() {
   });
   const { data: userStaked } = useReadContract({
     address: vaultAddr, abi: STAKING_VAULT_ABI, functionName: 'stakedBalance',
-    args: [address],
+    args: [address], query: { enabled: !!address },
   });
   const { data: earnedRaw } = useReadContract({
     address: vaultAddr, abi: STAKING_VAULT_ABI, functionName: 'earned',
-    args: [address],
+    args: [address], query: { enabled: !!address },
   });
   const { data: rewardRate } = useReadContract({
     address: vaultAddr, abi: STAKING_VAULT_ABI, functionName: 'rewardRate',
@@ -44,15 +44,15 @@ export default function Staking() {
   });
   const { data: isTop } = useReadContract({
     address: vaultAddr, abi: STAKING_VAULT_ABI, functionName: 'isTopStaker',
-    args: [address],
+    args: [address], query: { enabled: !!address },
   });
   const { data: allowance } = useReadContract({
     address: tokenAddr, abi: ERC20_ABI, functionName: 'allowance',
-    args: [address, vaultAddr],
+    args: [address, vaultAddr], query: { enabled: !!address },
   });
   const { data: tokenBalance } = useReadContract({
     address: tokenAddr, abi: ERC20_ABI, functionName: 'balanceOf',
-    args: [address],
+    args: [address], query: { enabled: !!address },
   });
 
   const now = Math.floor(Date.now() / 1000);

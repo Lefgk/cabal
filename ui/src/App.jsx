@@ -15,17 +15,11 @@ function App() {
         <ConnectButton />
       </header>
 
-      {!isConnected ? (
-        <div className="connect-prompt">
-          <p>Connect your wallet to interact with Cabal DAO</p>
-        </div>
-      ) : (
-        <div className="sections">
-          <Staking />
-          <Treasury />
-          <Proposals />
-        </div>
-      )}
+      <div className="sections">
+        <Staking />
+        <Treasury />
+        <Proposals />
+      </div>
     </>
   );
 }

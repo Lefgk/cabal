@@ -18,7 +18,7 @@ export default function Proposals() {
   // Check if user is top staker
   const { data: isTop } = useReadContract({
     address: vaultAddr, abi: STAKING_VAULT_ABI, functionName: 'isTopStaker',
-    args: [address],
+    args: [address], query: { enabled: !!address },
   });
 
   // Get proposal count
