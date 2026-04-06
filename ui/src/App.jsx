@@ -2,6 +2,7 @@ import { ConnectButton } from '@rainbow-me/rainbowkit';
 import { useAccount } from 'wagmi';
 import Staking from './components/Staking.jsx';
 import Treasury from './components/Treasury.jsx';
+import TokenInfo from './components/TokenInfo.jsx';
 import Proposals from './components/Proposals.jsx';
 import './App.css';
 
@@ -18,6 +19,7 @@ function App() {
       <div className="sections">
         <Staking />
         <Treasury />
+        <TokenInfo />
         <Proposals />
       </div>
     </>

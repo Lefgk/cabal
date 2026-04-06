@@ -353,3 +353,112 @@ button:disabled {
   font-weight: 600;
   min-width: 32px;
 }
+
+/* Mobile responsive */
+@media (max-width: 640px) {
+  #root {
+    padding: 0 12px 40px;
+  }
+
+  .app-header {
+    flex-direction: column;
+    gap: 12px;
+    text-align: center;
+    padding: 16px 0;
+  }
+
+  .card {
+    padding: 16px;
+    border-radius: 10px;
+  }
+
+  h1 { font-size: 22px; }
+  h2 { font-size: 18px; }
+  h3 { font-size: 16px; }
+
+  .stats-grid {
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+  }
+
+  .stat-box {
+    padding: 10px;
+  }
+
+  .stat-box .stat-value {
+    font-size: 13px;
+    word-break: break-all;
+  }
+
+  .stat-box .stat-label {
+    font-size: 11px;
+  }
+
+  .apr-banner {
+    padding: 12px 14px;
+  }
+
+  .apr-value {
+    font-size: 24px;
+  }
+
+  .input-group {
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .input-group input {
+    width: 100%;
+  }
+
+  .vote-buttons {
+    flex-direction: column;
+  }
+
+  .address-row {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+    padding: 8px 10px;
+  }
+
+  .address-link {
+    font-size: 11px;
+  }
+
+  .proposal-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+  }
+
+  .proposal-meta {
+    gap: 8px;
+    font-size: 12px;
+  }
+
+  .proposal-card {
+    padding: 14px;
+  }
+
+  .section-header {
+    flex-wrap: wrap;
+  }
+
+  .top-staker-badge {
+    margin-left: 0;
+  }
+
+  .form-group input,
+  .form-group select,
+  .form-group textarea {
+    width: 100% !important;
+  }
+
+  /* Tax table mobile */
+  .tax-row {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+  }
+}
