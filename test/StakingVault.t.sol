@@ -20,6 +20,46 @@ contract MockERC20 is ERC20 {
 }
 
 // ---------------------------------------------------------------
+//  Mock PulseX Router (for topUp tests)
+// ---------------------------------------------------------------
+
+contract MockWPLS is ERC20 {
+    constructor() ERC20("Wrapped PLS", "WPLS") {}
+    function deposit() external payable { _mint(msg.sender, msg.value); }
+}
+
+contract MockPulseXRouter {
+    address public immutable wplsAddr;
+    MockERC20 public rewardToken;
+    uint256 public swapRate; // reward tokens per PLS (scaled 1:1 default)
+
+    constructor(address _wpls, address _rewardToken) {
+        wplsAddr = _wpls;
+        rewardToken = MockERC20(_rewardToken);
+        swapRate = 1; // 1 PLS = 1 reward token by default
+    }
+
+    function setSwapRate(uint256 rate) external {
+        swapRate = rate;
+    }
+
+    function WPLS() external view returns (address) {
+        return wplsAddr;
+    }
+
+    function swapExactETHForTokensSupportingFeeOnTransferTokens(
+        uint256, /* amountOutMin */
+        address[] calldata, /* path */
+        address to,
+        uint256 /* deadline */
+    ) external payable {
+        // Simulate swap: mint reward tokens proportional to PLS sent
+        uint256 rewardAmount = msg.value * swapRate;
+        rewardToken.mint(to, rewardAmount);
+    }
+}
+
+// ---------------------------------------------------------------
 //  StakingVault Tests (Synthetix StakingRewards style)
 // ---------------------------------------------------------------
 
@@ -27,6 +67,8 @@ contract StakingVaultTest is Test {
     MockERC20 stakeToken;
     MockERC20 rewardToken;
     MockERC20 randomToken; // for recoverERC20 tests
+    MockWPLS wpls;
+    MockPulseXRouter router;
     StakingVault vault;
 
     address owner = address(this);
@@ -42,12 +84,16 @@ contract StakingVaultTest is Test {
         stakeToken = new MockERC20("Stake", "STK");
         rewardToken = new MockERC20("Reward", "RWD");
         randomToken = new MockERC20("Random", "RND");
+        wpls = new MockWPLS();
+        router = new MockPulseXRouter(address(wpls), address(rewardToken));
         vault = new StakingVault(
             address(stakeToken),
             address(rewardToken),
             owner,
             TOP_COUNT
         );
+        // Set the DEX router for topUp tests
+        vault.setDexRouter(address(router));
     }
 
     // ---------------------------------------------------------------
@@ -898,6 +944,150 @@ contract StakingVaultTest is Test {
 
         assertApproxEqAbs(rewardToken.balanceOf(alice), 500e18, 1e15);
         assertApproxEqAbs(rewardToken.balanceOf(bob), 500e18, 1e15);
+    }
+
+    // ---------------------------------------------------------------
+    //  topUp — PLS → reward token swap & auto-notify
+    // ---------------------------------------------------------------
+
+    function test_topUp_basic() public {
+        _mintAndApprove(alice, 100e18);
+        vm.prank(alice);
+        vault.stake(100e18);
+
+        // Send 10 PLS via topUp
+        vm.deal(address(this), 10e18);
+        vault.topUp{value: 10e18}();
+
+        // Should have started reward period
+        assertGt(vault.rewardRate(), 0);
+        assertEq(vault.periodFinish(), block.timestamp + SEVEN_DAYS);
+    }
+
+    function test_topUp_emitsEvents() public {
+        _mintAndApprove(alice, 100e18);
+        vm.prank(alice);
+        vault.stake(100e18);
+
+        vm.deal(address(this), 10e18);
+
+        vm.expectEmit(false, false, false, true);
+        emit IStakingVault.ToppedUp(10e18, 10e18); // 1:1 swap rate
+
+        vm.expectEmit(false, false, false, true);
+        emit IStakingVault.RewardAdded(10e18);
+
+        vault.topUp{value: 10e18}();
+    }
+
+    function test_topUp_revertsZeroPLS() public {
+        vm.expectRevert("StakingVault: zero PLS");
+        vault.topUp{value: 0}();
+    }
+
+    function test_topUp_revertsNoRouter() public {
+        // Deploy a fresh vault without router
+        StakingVault freshVault = new StakingVault(
+            address(stakeToken), address(rewardToken), owner, TOP_COUNT
+        );
+
+        vm.deal(address(this), 1e18);
+        vm.expectRevert("StakingVault: no router");
+        freshVault.topUp{value: 1e18}();
+    }
+
+    function test_topUp_distributesRewardsCorrectly() public {
+        _mintAndApprove(alice, 100e18);
+        vm.prank(alice);
+        vault.stake(100e18);
+
+        // TopUp with 700 PLS (1:1 rate = 700 reward tokens)
+        vm.deal(address(this), 700e18);
+        vault.topUp{value: 700e18}();
+
+        // Warp full period
+        vm.warp(block.timestamp + SEVEN_DAYS);
+
+        vm.prank(alice);
+        vault.getReward();
+
+        assertApproxEqAbs(rewardToken.balanceOf(alice), 700e18, 1e15);
+    }
+
+    function test_topUp_duringActivePeriod_restacks() public {
+        _mintAndApprove(alice, 100e18);
+        vm.prank(alice);
+        vault.stake(100e18);
+
+        // First topUp
+        vm.deal(address(this), 700e18);
+        vault.topUp{value: 700e18}();
+        uint256 rateBefore = vault.rewardRate();
+
+        // Warp halfway
+        vm.warp(block.timestamp + SEVEN_DAYS / 2);
+
+        // Second topUp
+        vm.deal(address(this), 700e18);
+        vault.topUp{value: 700e18}();
+        uint256 rateAfter = vault.rewardRate();
+
+        // Rate should increase (leftover + new combined)
+        assertGt(rateAfter, rateBefore);
+        assertEq(vault.periodFinish(), block.timestamp + SEVEN_DAYS);
+    }
+
+    function test_topUp_viaReceive() public {
+        _mintAndApprove(alice, 100e18);
+        vm.prank(alice);
+        vault.stake(100e18);
+
+        // Send PLS directly to vault (triggers receive → topUp)
+        vm.deal(address(this), 10e18);
+        (bool ok,) = address(vault).call{value: 10e18}("");
+        assertTrue(ok);
+
+        assertGt(vault.rewardRate(), 0);
+        assertEq(vault.periodFinish(), block.timestamp + SEVEN_DAYS);
+    }
+
+    function test_topUp_multipleUsers_proportionalRewards() public {
+        _mintAndApprove(alice, 75e18);
+        _mintAndApprove(bob, 25e18);
+
+        vm.prank(alice);
+        vault.stake(75e18);
+        vm.prank(bob);
+        vault.stake(25e18);
+
+        // TopUp with 1000 PLS
+        vm.deal(address(this), 1000e18);
+        vault.topUp{value: 1000e18}();
+
+        vm.warp(block.timestamp + SEVEN_DAYS);
+
+        assertApproxEqAbs(vault.earned(alice), 750e18, 1e15);
+        assertApproxEqAbs(vault.earned(bob), 250e18, 1e15);
+    }
+
+    // ---------------------------------------------------------------
+    //  Admin — setDexRouter
+    // ---------------------------------------------------------------
+
+    function test_setDexRouter() public {
+        address newRouter = makeAddr("newRouter");
+
+        vm.expectEmit(true, true, false, true);
+        emit IStakingVault.DexRouterUpdated(address(router), newRouter);
+
+        vault.setDexRouter(newRouter);
+        assertEq(address(vault.dexRouter()), newRouter);
+    }
+
+    function test_setDexRouter_revertsNonOwner() public {
+        vm.prank(alice);
+        vm.expectRevert();
+        vault.setDexRouter(alice);
     }
 
     // ---------------------------------------------------------------

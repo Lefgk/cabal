@@ -7,8 +7,10 @@ interface IStakingVault {
     event Withdrawn(address indexed user, uint256 amount);
     event RewardPaid(address indexed user, uint256 reward);
     event RewardAdded(uint256 reward);
+    event ToppedUp(uint256 plsAmount, uint256 rewardAmount);
     event RewardsDurationUpdated(uint256 newDuration);
     event DaoAddressUpdated(address indexed oldDao, address indexed newDao);
+    event DexRouterUpdated(address indexed oldRouter, address indexed newRouter);
     event TopStakerCountUpdated(uint256 oldCount, uint256 newCount);
     event Paused(bool isPaused);
 
@@ -20,6 +22,7 @@ interface IStakingVault {
 
     // --- Reward injection (called by token tax / anyone) ---
     function notifyRewardAmount(uint256 reward) external;
+    function topUp() external payable;
 
     // --- Views ---
     function earned(address account) external view returns (uint256);
@@ -33,6 +36,7 @@ interface IStakingVault {
     function getTopStakers() external view returns (address[] memory);
 
     // --- Admin ---
+    function setDexRouter(address router) external;
     function setDaoAddress(address dao) external;
     function setTopStakerCount(uint256 count) external;
     function setRewardsDuration(uint256 duration) external;

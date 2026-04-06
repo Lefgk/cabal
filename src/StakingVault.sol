@@ -7,6 +7,17 @@ import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {IStakingVault} from "./interfaces/IStakingVault.sol";
 
+interface IPulseXRouter {
+    function swapExactETHForTokensSupportingFeeOnTransferTokens(
+        uint256 amountOutMin,
+        address[] calldata path,
+        address to,
+        uint256 deadline
+    ) external payable;
+
+    function WPLS() external pure returns (address);
+}
+
 /// @title StakingVault
 /// @notice Synthetix StakingRewards-style vault with 7-day linear reward drip.
 ///         Stake an ERC-20 token, earn yield in a different reward token that
@@ -55,6 +66,12 @@ contract StakingVault is IStakingVault, Ownable, ReentrancyGuard {
     uint256 public topStakerCount;
     address[] internal _topStakers;
     mapping(address => bool) internal _isTopStaker;
+
+    // -------------------------------------------------------------------------
+    // DEX (for topUp swap)
+    // -------------------------------------------------------------------------
+
+    IPulseXRouter public dexRouter;
 
     // -------------------------------------------------------------------------
     // DAO
@@ -233,6 +250,63 @@ contract StakingVault is IStakingVault, Ownable, ReentrancyGuard {
     }
 
     // -------------------------------------------------------------------------
+    // Top-up — receive PLS, swap to reward token, auto-notify (ZKP pattern)
+    // -------------------------------------------------------------------------
+
+    /// @notice Receives PLS, swaps to the reward token via PulseX, and starts
+    ///         (or extends) the reward drip automatically.
+    function topUp() public payable nonReentrant updateReward(address(0)) {
+        require(msg.value > 0, "StakingVault: zero PLS");
+        require(address(dexRouter) != address(0), "StakingVault: no router");
+
+        uint256 balBefore = REWARDS_TOKEN.balanceOf(address(this));
+
+        // Swap PLS → WPLS → reward token via PulseX
+        address[] memory path = new address[](2);
+        path[0] = dexRouter.WPLS();
+        path[1] = address(REWARDS_TOKEN);
+
+        dexRouter.swapExactETHForTokensSupportingFeeOnTransferTokens{value: msg.value}(
+            0, // amountOutMin — accept any amount (MEV protection not critical for reward injection)
+            path,
+            address(this),
+            block.timestamp
+        );
+
+        uint256 balAfter = REWARDS_TOKEN.balanceOf(address(this));
+        uint256 reward = balAfter - balBefore;
+        require(reward > 0, "StakingVault: swap yielded zero");
+
+        // Notify reward amount (inline Synthetix logic)
+        if (block.timestamp >= periodFinish) {
+            rewardRate = reward / rewardsDuration;
+        } else {
+            uint256 remaining = periodFinish - block.timestamp;
+            uint256 leftover = remaining * rewardRate;
+            rewardRate = (reward + leftover) / rewardsDuration;
+        }
+
+        uint256 balance = REWARDS_TOKEN.balanceOf(address(this));
+        require(
+            rewardRate <= balance / rewardsDuration,
+            "StakingVault: reward too high"
+        );
+
+        lastUpdateTime = block.timestamp;
+        periodFinish = block.timestamp + rewardsDuration;
+
+        emit ToppedUp(msg.value, reward);
+        emit RewardAdded(reward);
+    }
+
+    /// @dev Accept PLS sent directly to the contract and auto-topUp.
+    receive() external payable {
+        if (address(dexRouter) != address(0)) {
+            topUp();
+        }
+    }
+
+    // -------------------------------------------------------------------------
     // DAO / top staker queries
     // -------------------------------------------------------------------------
 
@@ -247,6 +321,12 @@ contract StakingVault is IStakingVault, Ownable, ReentrancyGuard {
     // -------------------------------------------------------------------------
     // Admin
     // -------------------------------------------------------------------------
+
+    function setDexRouter(address router) external onlyOwner {
+        address old = address(dexRouter);
+        dexRouter = IPulseXRouter(router);
+        emit DexRouterUpdated(old, router);
+    }
 
     function setDaoAddress(address dao) external onlyOwner {
         address old = daoAddress;
