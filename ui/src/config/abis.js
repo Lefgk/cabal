@@ -206,7 +206,6 @@ export const TREASURY_DAO_ABI = [
     type: 'function',
     stateMutability: 'nonpayable',
     inputs: [
-      { name: 'pType', type: 'uint8' },
       { name: 'amount', type: 'uint256' },
       { name: 'target', type: 'address' },
       { name: 'description', type: 'string' },
@@ -257,7 +256,6 @@ export const TREASURY_DAO_ABI = [
         type: 'tuple',
         components: [
           { name: 'id', type: 'uint256' },
-          { name: 'pType', type: 'uint8' },
           { name: 'amount', type: 'uint256' },
           { name: 'target', type: 'address' },
           { name: 'description', type: 'string' },

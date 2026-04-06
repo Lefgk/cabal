@@ -3,13 +3,6 @@ pragma solidity ^0.8.24;
 
 interface ITreasuryDAO {
     // --- Enums ---
-    enum ProposalType {
-        BuyAndBurn,
-        Marketing,
-        LPExpansion,
-        Custom
-    }
-
     enum ProposalState {
         Pending,
         Active,
@@ -21,7 +14,6 @@ interface ITreasuryDAO {
     // --- Structs ---
     struct Proposal {
         uint256 id;
-        ProposalType pType;
         uint256 amount;
         address target;
         string description;
@@ -43,7 +35,6 @@ interface ITreasuryDAO {
     event ProposalCreated(
         uint256 indexed proposalId,
         address indexed proposer,
-        ProposalType pType,
         uint256 amount,
         address target,
         string description,
@@ -56,7 +47,7 @@ interface ITreasuryDAO {
         bool support,
         uint256 weight
     );
-    event ProposalExecuted(uint256 indexed proposalId, ProposalType pType, uint256 amount, address target);
+    event ProposalExecuted(uint256 indexed proposalId, uint256 amount, address target);
     event ProposalDefeated(uint256 indexed proposalId);
     event FundsUnlocked(uint256 indexed proposalId, uint256 amount);
     event WPLSDeposited(address indexed from, uint256 amount);
@@ -70,7 +61,6 @@ interface ITreasuryDAO {
 
     // --- Proposal lifecycle ---
     function propose(
-        ProposalType pType,
         uint256 amount,
         address target,
         string calldata description

@@ -18,25 +18,9 @@ interface IWPLS {
     function transferFrom(address from, address to, uint256 amount) external returns (bool);
 }
 
-/// @dev Minimal interface for PulseX V2 Router
-interface IPulseXRouter {
-    function swapExactTokensForTokens(
-        uint256 amountIn,
-        uint256 amountOutMin,
-        address[] calldata path,
-        address to,
-        uint256 deadline
-    ) external returns (uint256[] memory amounts);
-}
-
-/// @dev Minimal interface for the token (burn)
-interface IBurnable {
-    function burn(uint256 amount) external;
-}
-
 /// @title TreasuryDAO
 /// @notice PTGC-style DAO for PulseChain. Treasury receives 1% tax from the token;
-///         stakers vote on how to spend it (buy & burn, marketing, LP expansion, custom).
+///         stakers vote on how to spend it. Proposals simply send WPLS to a target address.
 contract TreasuryDAO is ITreasuryDAO, Ownable, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
@@ -114,20 +98,17 @@ contract TreasuryDAO is ITreasuryDAO, Ownable, ReentrancyGuard {
     // ---------------------------------------------------------------
 
     /// @notice Create a proposal. Only top stakers may propose.
+    ///         Proposals send WPLS to a target address. The description
+    ///         should explain the purpose (buy & burn, marketing, LP, etc).
     function propose(
-        ProposalType pType,
         uint256 amount,
         address target,
         string calldata description
     ) external override returns (uint256) {
         require(stakingVault.isTopStaker(msg.sender), "not top staker");
         require(amount > 0, "zero amount");
+        require(target != address(0), "target required");
         require(bytes(description).length > 0, "empty description");
-
-        // Marketing / LPExpansion / Custom need a target
-        if (pType != ProposalType.BuyAndBurn) {
-            require(target != address(0), "target required");
-        }
 
         // Ensure treasury can cover the proposal
         require(amount <= availableBalance(), "insufficient available balance");
@@ -141,7 +122,6 @@ contract TreasuryDAO is ITreasuryDAO, Ownable, ReentrancyGuard {
 
         _proposals[id] = Proposal({
             id: id,
-            pType: pType,
             amount: amount,
             target: target,
             description: description,
@@ -153,7 +133,7 @@ contract TreasuryDAO is ITreasuryDAO, Ownable, ReentrancyGuard {
             executed: false
         });
 
-        emit ProposalCreated(id, msg.sender, pType, amount, target, description, start, end);
+        emit ProposalCreated(id, msg.sender, amount, target, description, start, end);
         return id;
     }
 
@@ -184,6 +164,7 @@ contract TreasuryDAO is ITreasuryDAO, Ownable, ReentrancyGuard {
     }
 
     /// @notice Execute a proposal that has succeeded. Anyone may call.
+    ///         Sends WPLS to the proposal's target address.
     function executeProposal(uint256 proposalId) external override nonReentrant {
         require(proposalId < proposalCount, "invalid proposal");
         require(state(proposalId) == ProposalState.Succeeded, "not succeeded");
@@ -194,14 +175,10 @@ contract TreasuryDAO is ITreasuryDAO, Ownable, ReentrancyGuard {
         // Unlock the reserved funds (they are about to be spent)
         lockedAmount -= p.amount;
 
-        if (p.pType == ProposalType.BuyAndBurn) {
-            _executeBuyAndBurn(p.amount);
-        } else {
-            // Marketing, LPExpansion, Custom — transfer WPLS to target
-            IERC20(wpls).safeTransfer(p.target, p.amount);
-        }
+        // Transfer WPLS to target
+        IERC20(wpls).safeTransfer(p.target, p.amount);
 
-        emit ProposalExecuted(proposalId, p.pType, p.amount, p.target);
+        emit ProposalExecuted(proposalId, p.amount, p.target);
     }
 
     /// @notice Unlock funds for a defeated proposal. Anyone may call.
@@ -217,33 +194,6 @@ contract TreasuryDAO is ITreasuryDAO, Ownable, ReentrancyGuard {
         lockedAmount -= p.amount;
         emit FundsUnlocked(proposalId, p.amount);
         emit ProposalDefeated(proposalId);
-    }
-
-    // ---------------------------------------------------------------
-    //  Internal: BuyAndBurn
-    // ---------------------------------------------------------------
-
-    function _executeBuyAndBurn(uint256 amount) internal {
-        // Approve router to spend WPLS
-        IWPLS(wpls).approve(dexRouter, amount);
-
-        // Swap WPLS -> token
-        address[] memory path = new address[](2);
-        path[0] = wpls;
-        path[1] = token;
-
-        uint256[] memory amounts = IPulseXRouter(dexRouter)
-            .swapExactTokensForTokens(
-                amount,
-                0, // accept any amount (MEV protection is caller's responsibility via private mempool)
-                path,
-                address(this),
-                block.timestamp
-            );
-
-        // Burn all received tokens
-        uint256 bought = amounts[amounts.length - 1];
-        IBurnable(token).burn(bought);
     }
 
     // ---------------------------------------------------------------
@@ -270,10 +220,6 @@ contract TreasuryDAO is ITreasuryDAO, Ownable, ReentrancyGuard {
 
         // Already executed (or unlocked-defeated via the reused flag)
         if (p.executed) {
-            // Distinguish: if it was truly executed after success vs unlocked after defeat.
-            // Executed proposals always went through executeProposal which checks Succeeded.
-            // Defeated proposals that got unlocked also set executed=true.
-            // We check yesVotes > noVotes to distinguish.
             if (p.yesVotes > p.noVotes && _meetsQuorum(p)) {
                 return ProposalState.Executed;
             }
@@ -282,8 +228,6 @@ contract TreasuryDAO is ITreasuryDAO, Ownable, ReentrancyGuard {
 
         // Voting still open
         if (block.timestamp <= p.endTime) {
-            // Hasn't started should not happen since startTime = creation time,
-            // but if someone sets a future start, handle it.
             if (block.timestamp < p.startTime) {
                 return ProposalState.Pending;
             }
@@ -302,7 +246,6 @@ contract TreasuryDAO is ITreasuryDAO, Ownable, ReentrancyGuard {
         uint256 totalVotes = p.yesVotes + p.noVotes;
         uint256 staked = stakingVault.totalStaked();
         if (staked == 0) return false;
-        // quorumBps / BPS_DENOMINATOR of totalStaked must have voted
         return totalVotes * BPS_DENOMINATOR >= quorumBps * staked;
     }
 
