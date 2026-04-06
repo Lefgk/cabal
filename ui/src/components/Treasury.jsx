@@ -56,9 +56,13 @@ export default function Treasury() {
   return (
     <div className="card">
       <h2>Treasury & DAO Config</h2>
+      <p className="help-text">
+        The Treasury holds WPLS collected from the 1% Dev/Treasury tax on every buy and sell. These funds can only be spent through DAO proposals — no single person can withdraw. All parameters below are set on-chain and can only be changed through governance.
+      </p>
 
       {/* Treasury balances */}
-      <h3 style={{ marginTop: 12, marginBottom: 10 }}>Treasury Balance</h3>
+      <h3 style={{ marginTop: 12, marginBottom: 4 }}>Treasury Balance</h3>
+      <p className="help-text" style={{ marginBottom: 10 }}>Available = funds that can be used in new proposals. Locked = funds reserved for active/passed proposals not yet executed.</p>
       <div className="stats-grid">
         <div className="stat-box">
           <span className="stat-label">Available</span>
@@ -79,7 +83,8 @@ export default function Treasury() {
       </div>
 
       {/* Governance parameters */}
-      <h3 style={{ marginTop: 20, marginBottom: 10 }}>Governance Parameters</h3>
+      <h3 style={{ marginTop: 20, marginBottom: 4 }}>Governance Parameters</h3>
+      <p className="help-text" style={{ marginBottom: 10 }}>These rules govern how proposals work. Voting period is how long a vote stays open. Quorum is the minimum percentage of staked tokens that must vote for a proposal to pass. Only the top stakers can create proposals.</p>
       <div className="stats-grid">
         <div className="stat-box">
           <span className="stat-label">Voting Period</span>
@@ -100,7 +105,8 @@ export default function Treasury() {
       </div>
 
       {/* Contract addresses */}
-      <h3 style={{ marginTop: 20, marginBottom: 10 }}>Contract Addresses</h3>
+      <h3 style={{ marginTop: 20, marginBottom: 4 }}>Contract Addresses</h3>
+      <p className="help-text" style={{ marginBottom: 10 }}>All contracts are deployed on PulseChain. Click any address to view it on Otterscan.</p>
       <div className="address-grid">
         <div className="address-row">
           <span className="stat-label">Treasury DAO</span>

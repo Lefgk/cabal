@@ -73,6 +73,9 @@ export default function TokenInfo() {
   return (
     <div className="card">
       <h2>Token Info</h2>
+      <p className="help-text">
+        On-chain details about the token, its tax structure, and lifetime statistics. All data is read directly from the smart contracts on PulseChain.
+      </p>
 
       {/* Token Details */}
       <h3>Token Details</h3>
@@ -112,7 +115,8 @@ export default function TokenInfo() {
       </div>
 
       {/* Tax Structure */}
-      <h3 style={{ marginTop: '20px' }}>Tax Structure (5% total)</h3>
+      <h3 style={{ marginTop: 20, marginBottom: 4 }}>Tax Structure (5% total)</h3>
+      <p className="help-text" style={{ marginBottom: 10 }}>Every buy and sell on PulseX is taxed 5% total, split across these categories. Yield goes to stakers as eHEX rewards, Dev/Treasury fills the DAO treasury, Auto LP adds liquidity, External Burn buys and burns ZKP, and Burn destroys tokens permanently.</p>
       <div className="address-grid">
         {taxResults && taxResults.length > 0 ? (
           taxResults.map((res, i) => {
@@ -150,7 +154,8 @@ export default function TokenInfo() {
       </div>
 
       {/* Lifetime Stats */}
-      <h3 style={{ marginTop: '20px' }}>Lifetime Stats</h3>
+      <h3 style={{ marginTop: 20, marginBottom: 4 }}>Lifetime Stats</h3>
+      <p className="help-text" style={{ marginBottom: 10 }}>Cumulative totals since token launch. These numbers represent the total amount of tokens processed by each tax type.</p>
       <div className="stats-grid">
         <div className="stat-box">
           <span className="stat-label">Total Burned</span>
@@ -171,7 +176,8 @@ export default function TokenInfo() {
       </div>
 
       {/* Contract Ownership */}
-      <h3 style={{ marginTop: '20px' }}>Contract Ownership</h3>
+      <h3 style={{ marginTop: 20, marginBottom: 4 }}>Contract Ownership</h3>
+      <p className="help-text" style={{ marginBottom: 10 }}>The owner can adjust parameters like voting period, quorum, and pause the vault in emergencies. Ownership can be transferred or renounced.</p>
       <div className="address-grid">
         <div className="address-row">
           <span className="stat-label">Token Owner</span>

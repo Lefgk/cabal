@@ -354,6 +354,41 @@ button:disabled {
   min-width: 32px;
 }
 
+/* Help text */
+.help-text {
+  font-size: 13px;
+  color: var(--text);
+  line-height: 1.6;
+  margin: 0 0 12px;
+}
+
+.help-text strong {
+  color: var(--text-bright);
+}
+
+.help-box {
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 14px 16px;
+}
+
+.help-box .help-text {
+  margin-bottom: 0;
+}
+
+.help-list {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 13px;
+  color: var(--text);
+  line-height: 1.7;
+}
+
+.help-list strong {
+  color: var(--text-bright);
+}
+
 /* Mobile responsive */
 @media (max-width: 640px) {
   #root {

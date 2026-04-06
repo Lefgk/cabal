@@ -62,6 +62,19 @@ export default function Proposals() {
   return (
     <div className="card">
       <h2>Proposals</h2>
+      <p className="help-text">
+        Proposals let the community decide how to spend Treasury funds. Only top stakers can create proposals. All stakers can vote — your voting power equals your staked balance. Proposals need to meet the quorum threshold and get majority "Yes" votes to pass. Once passed, anyone can execute the proposal on-chain.
+      </p>
+
+      <div className="help-box" style={{ marginBottom: 16 }}>
+        <p className="help-text" style={{ marginBottom: 6 }}><strong style={{ color: 'var(--text-bright)' }}>Proposal Types:</strong></p>
+        <ul className="help-list">
+          <li><strong>BuyAndBurn</strong> — Uses WPLS from Treasury to buy tokens on PulseX, then burns them. Reduces supply.</li>
+          <li><strong>Marketing</strong> — Sends WPLS to a target wallet for marketing expenses.</li>
+          <li><strong>LP</strong> — Sends WPLS to a target address for adding liquidity on PulseX.</li>
+          <li><strong>Custom</strong> — Sends WPLS to any address for any other purpose described in the proposal.</li>
+        </ul>
+      </div>
 
       {count === 0 && <p style={{ color: 'var(--text)' }}>No proposals yet.</p>}
 
@@ -182,6 +195,9 @@ function CreateProposalForm({ writeContract, isWriting }) {
   return (
     <div style={{ marginTop: 24, paddingTop: 20, borderTop: '1px solid var(--border)' }}>
       <h3>Create Proposal</h3>
+      <p className="help-text" style={{ marginBottom: 14 }}>
+        As a top staker, you can create proposals to spend Treasury WPLS. Choose a type, specify the amount of WPLS to spend, and provide a target address. For BuyAndBurn, the target is ignored (tokens are bought and burned automatically). For Marketing/LP/Custom, the target is the wallet that will receive the WPLS.
+      </p>
 
       <div className="form-group">
         <label>Type</label>
@@ -193,7 +209,7 @@ function CreateProposalForm({ writeContract, isWriting }) {
       </div>
 
       <div className="form-group">
-        <label>Amount (WPLS)</label>
+        <label>Amount (WPLS) — How much WPLS to spend from the Treasury</label>
         <input
           type="text"
           placeholder="0.0"
@@ -204,10 +220,10 @@ function CreateProposalForm({ writeContract, isWriting }) {
       </div>
 
       <div className="form-group">
-        <label>Target Address</label>
+        <label>Target Address — The wallet that receives funds (ignored for BuyAndBurn)</label>
         <input
           type="text"
-          placeholder="0x..."
+          placeholder="0x... (leave empty for BuyAndBurn)"
           value={target}
           onChange={(e) => setTarget(e.target.value)}
           style={{ width: '100%', fontFamily: 'var(--mono)', fontSize: 13 }}

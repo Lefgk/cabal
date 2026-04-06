@@ -149,12 +149,23 @@ export default function Staking() {
         </div>
       </div>
 
+      <p className="help-text">
+        Stake your {stkSymbol} tokens to earn {rwdSymbol} rewards. Rewards are distributed linearly over a {durationLabel} period using a Synthetix-style drip — the longer you stake, the more you earn. The top {'{'}100{'}'} stakers by amount also gain the ability to create DAO proposals. You can withdraw or claim rewards at any time with no lock-up.
+      </p>
+
       {/* APR highlight */}
       {apr !== null && (
         <div className="apr-banner">
           <span className="apr-label">Projected APR</span>
           <span className="apr-value">{apr.toLocaleString(undefined, { maximumFractionDigits: 2 })}%</span>
-          <span className="apr-note">Based on current {durationLabel} reward period, annualized</span>
+          <span className="apr-note">Based on current {durationLabel} reward period, annualized. Actual returns depend on total staked and future reward deposits.</span>
+        </div>
+      )}
+
+      {!isActive && (
+        <div className="apr-banner" style={{ borderColor: 'rgba(239,68,68,0.3)', background: 'rgba(239,68,68,0.05)' }}>
+          <span className="apr-label">No Active Reward Period</span>
+          <span style={{ fontSize: 14, color: 'var(--text)' }}>Rewards need to be deposited and notified to start a new 7-day distribution period. You can still stake, but no rewards are currently being distributed.</span>
         </div>
       )}
 
@@ -189,7 +200,8 @@ export default function Staking() {
       {/* User stats */}
       {address && (
         <>
-          <h3 style={{ marginTop: 20, marginBottom: 12 }}>Your Position</h3>
+          <h3 style={{ marginTop: 20, marginBottom: 4 }}>Your Position</h3>
+          <p className="help-text" style={{ marginBottom: 12 }}>Your staked tokens and accumulated rewards. Pool share shows your percentage of the total staked supply.</p>
           <div className="stats-grid">
             <div className="stat-box">
               <span className="stat-label">Your Stake</span>
@@ -210,6 +222,7 @@ export default function Staking() {
           </div>
 
           {/* Stake */}
+          <p className="help-text" style={{ marginTop: 16, marginBottom: 4 }}>First approve the vault to spend your tokens, then enter an amount and stake. No lock-up — withdraw anytime.</p>
           <div className="input-group">
             <input type="text" placeholder="Amount to stake" value={stakeAmount} onChange={(e) => setStakeAmount(e.target.value)} />
             {needsApproval ? (
@@ -226,6 +239,7 @@ export default function Staking() {
           </div>
 
           {/* Claim & Exit */}
+          <p className="help-text" style={{ marginTop: 12, marginBottom: 4 }}>Claim collects your earned {rwdSymbol} rewards. Exit withdraws your entire stake and claims rewards in one transaction.</p>
           <div className="input-group">
             <button className="btn-green" onClick={handleClaim} disabled={isWriting}>Claim Rewards</button>
             <button className="btn-red" onClick={handleExit} disabled={isWriting}>Exit (Withdraw All + Claim)</button>
