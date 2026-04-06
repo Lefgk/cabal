@@ -150,6 +150,14 @@ export const STAKING_VAULT_ABI = [
     inputs: [],
     outputs: [{ name: '', type: 'uint256' }],
   },
+  // Extra state
+  {
+    name: 'paused',
+    type: 'function',
+    stateMutability: 'view',
+    inputs: [],
+    outputs: [{ name: '', type: 'bool' }],
+  },
   // Events (Synthetix-style)
   {
     name: 'Staked',
@@ -289,6 +297,49 @@ export const TREASURY_DAO_ABI = [
         ],
       },
     ],
+  },
+  // DAO config params
+  {
+    name: 'votingPeriod',
+    type: 'function',
+    stateMutability: 'view',
+    inputs: [],
+    outputs: [{ name: '', type: 'uint256' }],
+  },
+  {
+    name: 'quorumBps',
+    type: 'function',
+    stateMutability: 'view',
+    inputs: [],
+    outputs: [{ name: '', type: 'uint256' }],
+  },
+  {
+    name: 'lockedAmount',
+    type: 'function',
+    stateMutability: 'view',
+    inputs: [],
+    outputs: [{ name: '', type: 'uint256' }],
+  },
+  {
+    name: 'token',
+    type: 'function',
+    stateMutability: 'view',
+    inputs: [],
+    outputs: [{ name: '', type: 'address' }],
+  },
+  {
+    name: 'wpls',
+    type: 'function',
+    stateMutability: 'view',
+    inputs: [],
+    outputs: [{ name: '', type: 'address' }],
+  },
+  {
+    name: 'dexRouter',
+    type: 'function',
+    stateMutability: 'view',
+    inputs: [],
+    outputs: [{ name: '', type: 'address' }],
   },
   // Events
   {

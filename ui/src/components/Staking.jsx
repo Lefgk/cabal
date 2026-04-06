@@ -6,6 +6,7 @@ import { STAKING_VAULT_ABI, ERC20_ABI } from '../config/abis.js';
 
 const vaultAddr = ADDRESSES.stakingVault;
 const tokenAddr = ADDRESSES.stakeToken;
+const SECONDS_PER_YEAR = 365.25 * 24 * 3600;
 
 function formatCountdown(seconds) {
   if (seconds <= 0) return 'Ended';
@@ -21,13 +22,44 @@ export default function Staking() {
   const { address } = useAccount();
   const [stakeAmount, setStakeAmount] = useState('');
   const [withdrawAmount, setWithdrawAmount] = useState('');
+  const [showTopStakers, setShowTopStakers] = useState(false);
 
   const { writeContract, isPending: isWriting } = useWriteContract();
 
-  // Reads
+  // Global reads (no wallet needed)
   const { data: totalStaked } = useReadContract({
     address: vaultAddr, abi: STAKING_VAULT_ABI, functionName: 'totalStaked',
   });
+  const { data: rewardRate } = useReadContract({
+    address: vaultAddr, abi: STAKING_VAULT_ABI, functionName: 'rewardRate',
+  });
+  const { data: periodFinish } = useReadContract({
+    address: vaultAddr, abi: STAKING_VAULT_ABI, functionName: 'periodFinish',
+  });
+  const { data: rewardsDuration } = useReadContract({
+    address: vaultAddr, abi: STAKING_VAULT_ABI, functionName: 'rewardsDuration',
+  });
+  const { data: getRewardForDuration } = useReadContract({
+    address: vaultAddr, abi: STAKING_VAULT_ABI, functionName: 'getRewardForDuration',
+  });
+  const { data: totalStakers } = useReadContract({
+    address: vaultAddr, abi: STAKING_VAULT_ABI, functionName: 'totalStakers',
+  });
+  const { data: topStakers } = useReadContract({
+    address: vaultAddr, abi: STAKING_VAULT_ABI, functionName: 'getTopStakers',
+  });
+  const { data: rewardsTokenAddr } = useReadContract({
+    address: vaultAddr, abi: STAKING_VAULT_ABI, functionName: 'rewardsToken',
+  });
+  const { data: rewardsTokenSymbol } = useReadContract({
+    address: rewardsTokenAddr, abi: ERC20_ABI, functionName: 'symbol',
+    query: { enabled: !!rewardsTokenAddr },
+  });
+  const { data: stakeTokenSymbol } = useReadContract({
+    address: tokenAddr, abi: ERC20_ABI, functionName: 'symbol',
+  });
+
+  // User-specific reads
   const { data: userStaked } = useReadContract({
     address: vaultAddr, abi: STAKING_VAULT_ABI, functionName: 'stakedBalance',
     args: [address], query: { enabled: !!address },
@@ -35,12 +67,6 @@ export default function Staking() {
   const { data: earnedRaw } = useReadContract({
     address: vaultAddr, abi: STAKING_VAULT_ABI, functionName: 'earned',
     args: [address], query: { enabled: !!address },
-  });
-  const { data: rewardRate } = useReadContract({
-    address: vaultAddr, abi: STAKING_VAULT_ABI, functionName: 'rewardRate',
-  });
-  const { data: periodFinish } = useReadContract({
-    address: vaultAddr, abi: STAKING_VAULT_ABI, functionName: 'periodFinish',
   });
   const { data: isTop } = useReadContract({
     address: vaultAddr, abi: STAKING_VAULT_ABI, functionName: 'isTopStaker',
@@ -55,53 +81,55 @@ export default function Staking() {
     args: [address], query: { enabled: !!address },
   });
 
+  // Derived values
   const now = Math.floor(Date.now() / 1000);
   const timeLeft = periodFinish ? Number(periodFinish) - now : 0;
+  const isActive = timeLeft > 0;
+  const rwdSymbol = rewardsTokenSymbol || 'RWD';
+  const stkSymbol = stakeTokenSymbol || 'TOKEN';
+
+  // APR: (rewardRate * SECONDS_PER_YEAR / totalStaked) * 100
+  // This is a simple projection — assumes 1:1 value between stake and reward token
+  const apr = (() => {
+    if (!rewardRate || !totalStaked || totalStaked === 0n) return null;
+    const ratePerYear = Number(formatEther(rewardRate)) * SECONDS_PER_YEAR;
+    const staked = Number(formatEther(totalStaked));
+    if (staked === 0) return null;
+    return (ratePerYear / staked) * 100;
+  })();
+
+  // User pool share %
+  const poolShare = (() => {
+    if (!userStaked || !totalStaked || totalStaked === 0n) return null;
+    return (Number(formatEther(userStaked)) / Number(formatEther(totalStaked))) * 100;
+  })();
+
+  // Duration label
+  const durationLabel = rewardsDuration ? `${Number(rewardsDuration) / 86400}d` : '...';
 
   const needsApproval = (() => {
     if (!stakeAmount || !allowance) return true;
-    try {
-      return parseEther(stakeAmount) > allowance;
-    } catch {
-      return true;
-    }
+    try { return parseEther(stakeAmount) > allowance; } catch { return true; }
   })();
 
   const handleApprove = () => {
-    writeContract({
-      address: tokenAddr, abi: ERC20_ABI, functionName: 'approve',
-      args: [vaultAddr, maxUint256],
-    });
+    writeContract({ address: tokenAddr, abi: ERC20_ABI, functionName: 'approve', args: [vaultAddr, maxUint256] });
   };
-
   const handleStake = () => {
     if (!stakeAmount) return;
-    writeContract({
-      address: vaultAddr, abi: STAKING_VAULT_ABI, functionName: 'stake',
-      args: [parseEther(stakeAmount)],
-    });
+    writeContract({ address: vaultAddr, abi: STAKING_VAULT_ABI, functionName: 'stake', args: [parseEther(stakeAmount)] });
     setStakeAmount('');
   };
-
   const handleWithdraw = () => {
     if (!withdrawAmount) return;
-    writeContract({
-      address: vaultAddr, abi: STAKING_VAULT_ABI, functionName: 'withdraw',
-      args: [parseEther(withdrawAmount)],
-    });
+    writeContract({ address: vaultAddr, abi: STAKING_VAULT_ABI, functionName: 'withdraw', args: [parseEther(withdrawAmount)] });
     setWithdrawAmount('');
   };
-
   const handleClaim = () => {
-    writeContract({
-      address: vaultAddr, abi: STAKING_VAULT_ABI, functionName: 'getReward',
-    });
+    writeContract({ address: vaultAddr, abi: STAKING_VAULT_ABI, functionName: 'getReward' });
   };
-
   const handleExit = () => {
-    writeContract({
-      address: vaultAddr, abi: STAKING_VAULT_ABI, functionName: 'exit',
-    });
+    writeContract({ address: vaultAddr, abi: STAKING_VAULT_ABI, functionName: 'exit' });
   };
 
   const fmt = (val) => {
@@ -113,75 +141,118 @@ export default function Staking() {
     <div className="card">
       <div className="section-header">
         <h2>Staking</h2>
-        {isTop && <span className="top-staker-badge">Top Staker</span>}
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          {isTop && <span className="top-staker-badge">Top Staker</span>}
+          <span className={`badge ${isActive ? 'badge-active' : 'badge-defeated'}`}>
+            {isActive ? 'Active' : 'Inactive'}
+          </span>
+        </div>
       </div>
 
-      <div className="stat-row">
-        <span className="stat-label">Total Staked</span>
-        <span className="stat-value">{fmt(totalStaked)}</span>
-      </div>
-      <div className="stat-row">
-        <span className="stat-label">Your Stake</span>
-        <span className="stat-value">{fmt(userStaked)}</span>
-      </div>
-      <div className="stat-row">
-        <span className="stat-label">Earned Rewards</span>
-        <span className="stat-value">{fmt(earnedRaw)}</span>
-      </div>
-      <div className="stat-row">
-        <span className="stat-label">Reward Rate</span>
-        <span className="stat-value">{fmt(rewardRate)} / sec</span>
-      </div>
-      <div className="stat-row">
-        <span className="stat-label">Period Ends</span>
-        <span className="stat-value">{formatCountdown(timeLeft)}</span>
-      </div>
-      <div className="stat-row">
-        <span className="stat-label">Wallet Balance</span>
-        <span className="stat-value">{fmt(tokenBalance)}</span>
+      {/* APR highlight */}
+      {apr !== null && (
+        <div className="apr-banner">
+          <span className="apr-label">Projected APR</span>
+          <span className="apr-value">{apr.toLocaleString(undefined, { maximumFractionDigits: 2 })}%</span>
+          <span className="apr-note">Based on current {durationLabel} reward period, annualized</span>
+        </div>
+      )}
+
+      {/* Global stats */}
+      <div className="stats-grid">
+        <div className="stat-box">
+          <span className="stat-label">Total Staked</span>
+          <span className="stat-value">{fmt(totalStaked)} {stkSymbol}</span>
+        </div>
+        <div className="stat-box">
+          <span className="stat-label">Total Stakers</span>
+          <span className="stat-value">{totalStakers !== undefined ? Number(totalStakers).toLocaleString() : '...'}</span>
+        </div>
+        <div className="stat-box">
+          <span className="stat-label">Rewards This Period</span>
+          <span className="stat-value">{fmt(getRewardForDuration)} {rwdSymbol}</span>
+        </div>
+        <div className="stat-box">
+          <span className="stat-label">Reward Duration</span>
+          <span className="stat-value">{durationLabel}</span>
+        </div>
+        <div className="stat-box">
+          <span className="stat-label">Period Ends</span>
+          <span className="stat-value">{isActive ? formatCountdown(timeLeft) : 'No active period'}</span>
+        </div>
+        <div className="stat-box">
+          <span className="stat-label">Reward Rate</span>
+          <span className="stat-value">{fmt(rewardRate)} {rwdSymbol}/sec</span>
+        </div>
       </div>
 
-      {/* Stake */}
-      <div className="input-group">
-        <input
-          type="text"
-          placeholder="Amount to stake"
-          value={stakeAmount}
-          onChange={(e) => setStakeAmount(e.target.value)}
-        />
-        {needsApproval ? (
-          <button onClick={handleApprove} disabled={isWriting}>
-            Approve
+      {/* User stats */}
+      {address && (
+        <>
+          <h3 style={{ marginTop: 20, marginBottom: 12 }}>Your Position</h3>
+          <div className="stats-grid">
+            <div className="stat-box">
+              <span className="stat-label">Your Stake</span>
+              <span className="stat-value">{fmt(userStaked)} {stkSymbol}</span>
+            </div>
+            <div className="stat-box">
+              <span className="stat-label">Pool Share</span>
+              <span className="stat-value">{poolShare !== null ? `${poolShare.toFixed(4)}%` : '...'}</span>
+            </div>
+            <div className="stat-box">
+              <span className="stat-label">Earned Rewards</span>
+              <span className="stat-value highlight-green">{fmt(earnedRaw)} {rwdSymbol}</span>
+            </div>
+            <div className="stat-box">
+              <span className="stat-label">Wallet Balance</span>
+              <span className="stat-value">{fmt(tokenBalance)} {stkSymbol}</span>
+            </div>
+          </div>
+
+          {/* Stake */}
+          <div className="input-group">
+            <input type="text" placeholder="Amount to stake" value={stakeAmount} onChange={(e) => setStakeAmount(e.target.value)} />
+            {needsApproval ? (
+              <button onClick={handleApprove} disabled={isWriting}>Approve</button>
+            ) : (
+              <button onClick={handleStake} disabled={isWriting || !stakeAmount}>Stake</button>
+            )}
+          </div>
+
+          {/* Withdraw */}
+          <div className="input-group">
+            <input type="text" placeholder="Amount to withdraw" value={withdrawAmount} onChange={(e) => setWithdrawAmount(e.target.value)} />
+            <button onClick={handleWithdraw} disabled={isWriting || !withdrawAmount}>Withdraw</button>
+          </div>
+
+          {/* Claim & Exit */}
+          <div className="input-group">
+            <button className="btn-green" onClick={handleClaim} disabled={isWriting}>Claim Rewards</button>
+            <button className="btn-red" onClick={handleExit} disabled={isWriting}>Exit (Withdraw All + Claim)</button>
+          </div>
+        </>
+      )}
+
+      {/* Top Stakers */}
+      {topStakers && topStakers.length > 0 && (
+        <div style={{ marginTop: 20 }}>
+          <button className="btn-link" onClick={() => setShowTopStakers(!showTopStakers)}>
+            {showTopStakers ? 'Hide' : 'Show'} Top Stakers ({topStakers.length})
           </button>
-        ) : (
-          <button onClick={handleStake} disabled={isWriting || !stakeAmount}>
-            Stake
-          </button>
-        )}
-      </div>
-
-      {/* Withdraw */}
-      <div className="input-group">
-        <input
-          type="text"
-          placeholder="Amount to withdraw"
-          value={withdrawAmount}
-          onChange={(e) => setWithdrawAmount(e.target.value)}
-        />
-        <button onClick={handleWithdraw} disabled={isWriting || !withdrawAmount}>
-          Withdraw
-        </button>
-      </div>
-
-      {/* Claim & Exit */}
-      <div className="input-group">
-        <button className="btn-green" onClick={handleClaim} disabled={isWriting}>
-          Claim Rewards
-        </button>
-        <button className="btn-red" onClick={handleExit} disabled={isWriting}>
-          Exit (Withdraw All + Claim)
-        </button>
-      </div>
+          {showTopStakers && (
+            <div className="top-stakers-list">
+              {topStakers.map((addr, i) => (
+                <div key={addr} className="top-staker-item">
+                  <span className="rank">#{i + 1}</span>
+                  <a href={`https://otter.pulsechain.com/address/${addr}`} target="_blank" rel="noopener noreferrer" className="address-link">
+                    {addr}
+                  </a>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
