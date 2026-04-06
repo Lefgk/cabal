@@ -12,9 +12,20 @@ const TAX_TYPE_LABELS = {
   5: 'Auto LP',
 };
 
+const TAX_MOMENT_LABELS = {
+  0: 'Both',
+  1: 'Buy Only',
+  2: 'Sell Only',
+  3: 'Buy Only',
+  4: 'Sell Only',
+};
+
 const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
+const DEAD_ADDRESS = '0x000000000000000000000000000000000000dEaD';
 
 const OTTERSCAN = 'https://otter.pulsechain.com/address/';
+
+const TAX_COUNT = 5; // hardcoded — no taxCount() on-chain
 
 function formatNumber(value) {
   if (!value) return '0';
@@ -32,7 +43,6 @@ export default function TokenInfo() {
   const { data: totalSupply } = useReadContract({ ...tokenContract, functionName: 'totalSupply' });
   const { data: tradingEnabled } = useReadContract({ ...tokenContract, functionName: 'tradingEnabled' });
   const { data: tokenOwner } = useReadContract({ ...tokenContract, functionName: 'owner' });
-  const { data: taxCount } = useReadContract({ ...tokenContract, functionName: 'taxCount' });
 
   // Lifetime stats
   const { data: totalBurned } = useReadContract({ ...tokenContract, functionName: 'totalBurned' });
@@ -59,9 +69,8 @@ export default function TokenInfo() {
     functionName: 'owner',
   });
 
-  // Read all taxes
-  const taxCountNum = taxCount ? Number(taxCount) : 0;
-  const taxCalls = Array.from({ length: taxCountNum }, (_, i) => ({
+  // Read all 5 taxes
+  const taxCalls = Array.from({ length: TAX_COUNT }, (_, i) => ({
     ...tokenContract,
     functionName: 'taxes',
     args: [BigInt(i)],
@@ -102,16 +111,6 @@ export default function TokenInfo() {
                 : <span className="badge badge-defeated">No</span>}
           </span>
         </div>
-        <div className="stat-box">
-          <span className="stat-label">Owner</span>
-          <span className="stat-value">
-            {tokenOwner ? (
-              <a className="address-link" href={`${OTTERSCAN}${tokenOwner}`} target="_blank" rel="noopener noreferrer">
-                {tokenOwner}
-              </a>
-            ) : '...'}
-          </span>
-        </div>
       </div>
 
       {/* Tax Structure */}
@@ -121,18 +120,27 @@ export default function TokenInfo() {
         {taxResults && taxResults.length > 0 ? (
           taxResults.map((res, i) => {
             if (!res || res.status === 'failure') return null;
-            const result = res.result;
-            const taxType = Number(result[0]);
-            const bps = Number(result[1]);
-            const taxToken = result[2];
-            const rewardInPls = result[3];
+            const r = res.result;
+            // Struct: (taxMoment, taxType, field2, bps, wallet, token, burnAddress, rewardInPls, field8)
+            const taxMoment = Number(r[0]);
+            const taxType = Number(r[1]);
+            const bps = Number(r[3]);
+            const wallet = r[4];
+            const taxToken = r[5];
+            const rewardInPls = r[7];
             const pct = (bps / 100).toFixed(2);
             const label = TAX_TYPE_LABELS[taxType] || `Type ${taxType}`;
-            const hasToken = taxToken && taxToken !== ZERO_ADDRESS;
+            const momentLabel = TAX_MOMENT_LABELS[taxMoment] || '';
+            const hasToken = taxToken && taxToken !== ZERO_ADDRESS && taxToken !== DEAD_ADDRESS;
 
             return (
-              <div className="address-row" key={i}>
-                <span className="stat-label">{label} ({pct}%)</span>
+              <div className="address-row" key={i} style={{ flexWrap: 'wrap', gap: 6 }}>
+                <span className="stat-label" style={{ minWidth: 140 }}>
+                  {label} ({pct}%)
+                  {momentLabel && momentLabel !== 'Both' && (
+                    <span className="badge badge-pending" style={{ marginLeft: 6, fontSize: 10 }}>{momentLabel}</span>
+                  )}
+                </span>
                 <span className="stat-value" style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
                   {hasToken && (
                     <a className="address-link" href={`${OTTERSCAN}${taxToken}`} target="_blank" rel="noopener noreferrer">

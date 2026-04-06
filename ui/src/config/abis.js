@@ -427,22 +427,20 @@ export const TOKEN_TAX_ABI = [
     outputs: [{ name: '', type: 'bool' }],
   },
   {
-    name: 'taxCount',
-    type: 'function',
-    stateMutability: 'view',
-    inputs: [],
-    outputs: [{ name: '', type: 'uint256' }],
-  },
-  {
     name: 'taxes',
     type: 'function',
     stateMutability: 'view',
     inputs: [{ name: '', type: 'uint256' }],
     outputs: [
+      { name: 'taxMoment', type: 'uint8' },
       { name: 'taxType', type: 'uint8' },
+      { name: 'field2', type: 'uint8' },
       { name: 'bps', type: 'uint256' },
+      { name: 'wallet', type: 'address' },
       { name: 'token', type: 'address' },
+      { name: 'burnAddress', type: 'address' },
       { name: 'rewardInPls', type: 'bool' },
+      { name: 'field8', type: 'bool' },
     ],
   },
   {
