@@ -1,0 +1,55 @@
+/* App-level layout styles */
+
+.app-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 20px 0;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 32px;
+}
+
+.app-header h1 {
+  margin: 0;
+  font-size: 24px;
+  background: linear-gradient(135deg, var(--accent), #a78bfa);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.sections {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.error-msg {
+  color: var(--red);
+  font-size: 13px;
+  margin-top: 6px;
+}
+
+.success-msg {
+  color: var(--green);
+  font-size: 13px;
+  margin-top: 6px;
+}
+
+.loading {
+  color: var(--text);
+  font-size: 14px;
+  padding: 20px;
+  text-align: center;
+}
+
+.connect-prompt {
+  text-align: center;
+  padding: 40px 20px;
+  color: var(--text);
+}
+
+.connect-prompt p {
+  margin-bottom: 16px;
+  font-size: 16px;
+}
