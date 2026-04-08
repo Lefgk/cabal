@@ -226,25 +226,7 @@ contract StakingVault is IStakingVault, Ownable, ReentrancyGuard {
 
         REWARDS_TOKEN.safeTransferFrom(msg.sender, address(this), reward);
 
-        if (block.timestamp >= periodFinish) {
-            // No active period — start fresh.
-            rewardRate = reward / rewardsDuration;
-        } else {
-            // Active period — add leftover + new reward and restart timer.
-            uint256 remaining = periodFinish - block.timestamp;
-            uint256 leftover = remaining * rewardRate;
-            rewardRate = (reward + leftover) / rewardsDuration;
-        }
-
-        // Ensure the contract actually holds enough to cover the full period.
-        uint256 balance = REWARDS_TOKEN.balanceOf(address(this));
-        require(
-            rewardRate <= balance / rewardsDuration,
-            "StakingVault: reward too high"
-        );
-
-        lastUpdateTime = block.timestamp;
-        periodFinish = block.timestamp + rewardsDuration;
+        _startRewardPeriod(reward);
 
         emit RewardAdded(reward);
     }
@@ -277,23 +259,7 @@ contract StakingVault is IStakingVault, Ownable, ReentrancyGuard {
         uint256 reward = balAfter - balBefore;
         require(reward > 0, "StakingVault: swap yielded zero");
 
-        // Notify reward amount (inline Synthetix logic)
-        if (block.timestamp >= periodFinish) {
-            rewardRate = reward / rewardsDuration;
-        } else {
-            uint256 remaining = periodFinish - block.timestamp;
-            uint256 leftover = remaining * rewardRate;
-            rewardRate = (reward + leftover) / rewardsDuration;
-        }
-
-        uint256 balance = REWARDS_TOKEN.balanceOf(address(this));
-        require(
-            rewardRate <= balance / rewardsDuration,
-            "StakingVault: reward too high"
-        );
-
-        lastUpdateTime = block.timestamp;
-        periodFinish = block.timestamp + rewardsDuration;
+        _startRewardPeriod(reward);
 
         emit ToppedUp(msg.value, reward);
         emit RewardAdded(reward);
@@ -304,6 +270,31 @@ contract StakingVault is IStakingVault, Ownable, ReentrancyGuard {
         if (address(dexRouter) != address(0)) {
             topUp();
         }
+    }
+
+    // -------------------------------------------------------------------------
+    // Process rewards — auto-notify when reward tokens are sent directly
+    // -------------------------------------------------------------------------
+
+    /// @notice Detects any excess reward tokens in the contract (sent by the
+    ///         token factory tax system) and starts/extends the reward drip.
+    ///         Anyone can call this — it simply processes already-received tokens.
+    function processRewards() external nonReentrant updateReward(address(0)) {
+        uint256 balance = REWARDS_TOKEN.balanceOf(address(this));
+
+        // Calculate how many reward tokens are "owed" (committed to current drip)
+        uint256 committed;
+        if (block.timestamp < periodFinish) {
+            committed = (periodFinish - block.timestamp) * rewardRate;
+        }
+
+        // Excess = balance minus committed rewards
+        require(balance > committed, "StakingVault: no new rewards");
+        uint256 reward = balance - committed;
+
+        _startRewardPeriod(reward);
+
+        emit RewardAdded(reward);
     }
 
     // -------------------------------------------------------------------------
@@ -380,6 +371,29 @@ contract StakingVault is IStakingVault, Ownable, ReentrancyGuard {
 
     function rewardsToken() external view returns (address) {
         return address(REWARDS_TOKEN);
+    }
+
+    // -------------------------------------------------------------------------
+    // Internal — reward period management
+    // -------------------------------------------------------------------------
+
+    function _startRewardPeriod(uint256 reward) internal {
+        if (block.timestamp >= periodFinish) {
+            rewardRate = reward / rewardsDuration;
+        } else {
+            uint256 remaining = periodFinish - block.timestamp;
+            uint256 leftover = remaining * rewardRate;
+            rewardRate = (reward + leftover) / rewardsDuration;
+        }
+
+        uint256 balance = REWARDS_TOKEN.balanceOf(address(this));
+        require(
+            rewardRate <= balance / rewardsDuration,
+            "StakingVault: reward too high"
+        );
+
+        lastUpdateTime = block.timestamp;
+        periodFinish = block.timestamp + rewardsDuration;
     }
 
     // -------------------------------------------------------------------------

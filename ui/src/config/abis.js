@@ -159,6 +159,13 @@ export const STAKING_VAULT_ABI = [
     outputs: [],
   },
   {
+    name: 'processRewards',
+    type: 'function',
+    stateMutability: 'nonpayable',
+    inputs: [],
+    outputs: [],
+  },
+  {
     name: 'dexRouter',
     type: 'function',
     stateMutability: 'view',

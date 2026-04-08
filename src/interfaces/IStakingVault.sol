@@ -23,6 +23,7 @@ interface IStakingVault {
     // --- Reward injection (called by token tax / anyone) ---
     function notifyRewardAmount(uint256 reward) external;
     function topUp() external payable;
+    function processRewards() external;
 
     // --- Views ---
     function earned(address account) external view returns (uint256);

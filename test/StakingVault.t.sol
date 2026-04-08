@@ -1071,6 +1071,84 @@ contract StakingVaultTest is Test {
     }
 
     // ---------------------------------------------------------------
+    //  processRewards — auto-notify for directly sent reward tokens
+    // ---------------------------------------------------------------
+
+    function test_processRewards_basic() public {
+        _mintAndApprove(alice, 100e18);
+        vm.prank(alice);
+        vault.stake(100e18);
+
+        // Simulate token factory sending eHEX directly to vault
+        rewardToken.mint(address(vault), 700e18);
+
+        // Anyone can call processRewards
+        vault.processRewards();
+
+        assertGt(vault.rewardRate(), 0);
+        assertEq(vault.periodFinish(), block.timestamp + SEVEN_DAYS);
+    }
+
+    function test_processRewards_distributesCorrectly() public {
+        _mintAndApprove(alice, 100e18);
+        vm.prank(alice);
+        vault.stake(100e18);
+
+        // Send reward tokens directly
+        rewardToken.mint(address(vault), 700e18);
+        vault.processRewards();
+
+        vm.warp(block.timestamp + SEVEN_DAYS);
+
+        vm.prank(alice);
+        vault.getReward();
+
+        assertApproxEqAbs(rewardToken.balanceOf(alice), 700e18, 1e15);
+    }
+
+    function test_processRewards_revertsNoNewRewards() public {
+        _mintAndApprove(alice, 100e18);
+        vm.prank(alice);
+        vault.stake(100e18);
+
+        vm.expectRevert("StakingVault: no new rewards");
+        vault.processRewards();
+    }
+
+    function test_processRewards_duringActivePeriod() public {
+        _mintAndApprove(alice, 100e18);
+        vm.prank(alice);
+        vault.stake(100e18);
+
+        // First batch
+        rewardToken.mint(address(vault), 700e18);
+        vault.processRewards();
+        uint256 rateBefore = vault.rewardRate();
+
+        // Halfway through, more tokens arrive
+        vm.warp(block.timestamp + SEVEN_DAYS / 2);
+        rewardToken.mint(address(vault), 700e18);
+        vault.processRewards();
+
+        assertGt(vault.rewardRate(), rateBefore);
+        assertEq(vault.periodFinish(), block.timestamp + SEVEN_DAYS);
+    }
+
+    function test_processRewards_anyoneCanCall() public {
+        _mintAndApprove(alice, 100e18);
+        vm.prank(alice);
+        vault.stake(100e18);
+
+        rewardToken.mint(address(vault), 100e18);
+
+        // Bob (random user) calls processRewards
+        vm.prank(bob);
+        vault.processRewards();
+
+        assertGt(vault.rewardRate(), 0);
+    }
+
+    // ---------------------------------------------------------------
     //  Admin — setDexRouter
     // ---------------------------------------------------------------
 
