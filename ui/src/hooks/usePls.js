@@ -76,6 +76,7 @@ export function useSafeWriteContract() {
   const {
     isLoading: isMining,
     isSuccess: isConfirmed,
+    error: receiptError,
   } = useWaitForTransactionReceipt({
     hash: base.data,
     chainId: PULSECHAIN_ID,
@@ -100,6 +101,11 @@ export function useSafeWriteContract() {
     [base],
   );
 
+  // Combine submission errors (from wallet rejection / simulation / etc)
+  // with receipt errors (the tx actually reverted on-chain). Callers get
+  // one field to render.
+  const txError = base.error || receiptError || null;
+
   return {
     ...base,
     writeContract,
@@ -108,5 +114,30 @@ export function useSafeWriteContract() {
     isMining,
     isConfirmed,
     isOnWrongChain: !isOnPulseChain,
+    txError,
   };
+}
+
+/// Extract a short, user-facing error message from a viem/wagmi error.
+/// Viem wraps revert reasons in `ContractFunctionExecutionError`:
+///   err.shortMessage   → "Execution reverted with reason: ..."
+///   err.cause?.reason  → "insufficient available balance"
+///   err.metaMessages[] → additional context lines
+/// We walk the chain looking for the most specific human-readable string.
+export function prettyError(err) {
+  if (!err) return '';
+  // Walk the error cause chain to find a revert reason.
+  let cur = err;
+  for (let i = 0; i < 6 && cur; i++) {
+    if (cur.reason && typeof cur.reason === 'string') return cur.reason;
+    if (cur.shortMessage && typeof cur.shortMessage === 'string') {
+      return cur.shortMessage;
+    }
+    cur = cur.cause;
+  }
+  if (err.message && typeof err.message === 'string') {
+    // Truncate the multi-line stack wagmi usually appends.
+    return err.message.split('\n')[0];
+  }
+  return 'Unknown error';
 }

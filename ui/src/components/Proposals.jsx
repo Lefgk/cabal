@@ -1,9 +1,11 @@
 import { useState } from 'react';
 import { useAccount } from 'wagmi';
-import { useReadContract, useReadContracts, useSafeWriteContract } from '../hooks/usePls.js';
-import { formatEther, parseEther } from 'viem';
+import { useReadContract, useReadContracts, useSafeWriteContract, prettyError } from '../hooks/usePls.js';
+import { useSimulateContract } from 'wagmi';
+import { formatEther, parseEther, isAddress } from 'viem';
 import { ADDRESSES } from '../config/contracts.js';
 import { TREASURY_DAO_ABI, STAKING_VAULT_ABI } from '../config/abis.js';
+import { PULSECHAIN_ID } from '../config/wagmi.js';
 import TokenIcon from './TokenIcon.jsx';
 
 const daoAddr = ADDRESSES.treasuryDAO;
@@ -32,6 +34,7 @@ export default function Proposals() {
     isPending: isWriting,
     isMining,
     isOnWrongChain,
+    txError,
   } = useSafeWriteContract();
   const busy = isWriting || isMining;
 
@@ -47,6 +50,12 @@ export default function Proposals() {
   });
   const { data: quorumBps } = useReadContract({
     address: daoAddr, abi: TREASURY_DAO_ABI, functionName: 'quorumBps',
+  });
+  // Unlocked WPLS in the DAO treasury (balance minus lockedAmount from
+  // active proposals). propose() reverts if amount > availableBalance, so
+  // we surface this on the form as a hard ceiling.
+  const { data: availableBalance } = useReadContract({
+    address: daoAddr, abi: TREASURY_DAO_ABI, functionName: 'availableBalance',
   });
 
   const count = proposalCount ? Number(proposalCount) : 0;
@@ -113,6 +122,7 @@ export default function Proposals() {
         isOnWrongChain={isOnWrongChain}
         address={address}
         isTop={isTop}
+        availableBalance={availableBalance}
       />
       {address && isOnWrongChain && (
         <p className="help-text" style={{ marginTop: 8, color: 'var(--danger, #c33)' }}>
@@ -121,6 +131,22 @@ export default function Proposals() {
       )}
       {isMining && (
         <p className="help-text" style={{ marginTop: 8 }}>Waiting for confirmation…</p>
+      )}
+      {txError && (
+        <div
+          style={{
+            marginTop: 12,
+            padding: '10px 14px',
+            background: 'rgba(239,68,68,0.12)',
+            border: '1px solid rgba(239,68,68,0.45)',
+            borderRadius: 8,
+            color: '#fecaca',
+            fontSize: 13,
+            wordBreak: 'break-word',
+          }}
+        >
+          <strong>Transaction failed:</strong> {prettyError(txError)}
+        </div>
       )}
     </div>
   );
@@ -237,20 +263,49 @@ function ProposalCard({ proposal, address, busy, isOnWrongChain, writeContract, 
   );
 }
 
-function CreateProposalForm({ writeContract, busy, isOnWrongChain, address, isTop }) {
+function CreateProposalForm({ writeContract, busy, isOnWrongChain, address, isTop, availableBalance }) {
   const [amount, setAmount] = useState('');
   const [target, setTarget] = useState('');
   const [description, setDescription] = useState('');
 
+  // Parse the amount input into wei once, for the pre-check + simulation.
+  // Any parse failure (letters, empty, etc) collapses to null and the
+  // submit button disables itself.
+  let amountWei = null;
+  try { if (amount) amountWei = parseEther(amount); } catch { /* invalid */ }
+
+  const targetValid = target && isAddress(target);
+  const inputsComplete = !!(amountWei && amountWei > 0n && targetValid && description);
+  const exceedsTreasury =
+    amountWei !== null && availableBalance !== undefined && amountWei > availableBalance;
+
+  // Ask the node to dry-run propose() with the user's exact inputs — this
+  // catches ALL revert reasons (not top staker, insufficient balance,
+  // zero amount, etc) and surfaces the node's revert string directly.
+  // Only enabled when we have a plausible set of inputs to avoid
+  // spamming the RPC on every keystroke.
+  const { error: simError, isFetching: isSimulating } = useSimulateContract({
+    address: ADDRESSES.treasuryDAO,
+    abi: TREASURY_DAO_ABI,
+    functionName: 'propose',
+    args: amountWei && targetValid && description ? [amountWei, target, description] : undefined,
+    account: address,
+    chainId: PULSECHAIN_ID,
+    query: {
+      enabled:
+        !!address && !!isTop && inputsComplete && !exceedsTreasury && !isOnWrongChain,
+      // Keep dry-runs cheap — don't refetch on window focus, etc.
+      refetchOnWindowFocus: false,
+      retry: false,
+    },
+  });
+
   const handleCreate = () => {
-    if (!description || !amount || !target) return;
+    if (!inputsComplete) return;
     writeContract({
       address: ADDRESSES.treasuryDAO, abi: TREASURY_DAO_ABI, functionName: 'propose',
-      args: [parseEther(amount), target, description],
+      args: [amountWei, target, description],
     });
-    setAmount('');
-    setTarget('');
-    setDescription('');
   };
 
   const gateMsg = !address
@@ -259,20 +314,50 @@ function CreateProposalForm({ writeContract, busy, isOnWrongChain, address, isTo
       ? 'Only top-100 stakers can create proposals. Stake more to qualify.'
       : null;
 
+  // Build the warning / error line shown above the Submit button.
+  // Priority: client-side treasury check > simulation error > nothing.
+  let warning = null;
+  if (exceedsTreasury) {
+    warning = `Amount exceeds available treasury (${fmtTok(availableBalance)} WPLS).`;
+  } else if (simError && inputsComplete) {
+    warning = `Simulation failed: ${prettyError(simError)}`;
+  }
+
   return (
     <div style={{ marginTop: 24, paddingTop: 20, borderTop: '1px solid var(--border)' }}>
       <h3>Create Proposal</h3>
       {gateMsg && <p className="help-text" style={{ marginBottom: 12 }}>{gateMsg}</p>}
 
       <div className="form-group">
-        <label>Amount (WPLS)</label>
+        <label>
+          Amount (WPLS)
+          {availableBalance !== undefined && (
+            <span style={{ marginLeft: 10, fontSize: 12, color: 'var(--text)' }}>
+              Available: <strong>{fmtTok(availableBalance)} WPLS</strong>
+              {availableBalance > 0n && (
+                <button
+                  type="button"
+                  className="btn-link"
+                  style={{ marginLeft: 8 }}
+                  onClick={() => setAmount(formatEther(availableBalance))}
+                  disabled={!isTop}
+                >
+                  Max
+                </button>
+              )}
+            </span>
+          )}
+        </label>
         <input
           type="text"
           placeholder="0.0"
           value={amount}
           onChange={(e) => setAmount(e.target.value)}
           disabled={!isTop}
-          style={{ width: '100%' }}
+          style={{
+            width: '100%',
+            borderColor: exceedsTreasury ? 'var(--red)' : undefined,
+          }}
         />
       </div>
 
@@ -284,8 +369,16 @@ function CreateProposalForm({ writeContract, busy, isOnWrongChain, address, isTo
           value={target}
           onChange={(e) => setTarget(e.target.value)}
           disabled={!isTop}
-          style={{ width: '100%', fontFamily: 'var(--mono)', fontSize: 13 }}
+          style={{
+            width: '100%',
+            fontFamily: 'var(--mono)',
+            fontSize: 13,
+            borderColor: target && !targetValid ? 'var(--red)' : undefined,
+          }}
         />
+        {target && !targetValid && (
+          <p style={{ fontSize: 12, color: 'var(--red)', marginTop: 4 }}>Invalid address</p>
+        )}
       </div>
 
       <div className="form-group">
@@ -300,11 +393,25 @@ function CreateProposalForm({ writeContract, busy, isOnWrongChain, address, isTo
         />
       </div>
 
+      {warning && (
+        <p style={{ fontSize: 13, color: 'var(--red)', marginBottom: 10 }}>
+          {warning}
+        </p>
+      )}
+
       <button
         onClick={handleCreate}
-        disabled={!isTop || busy || isOnWrongChain || !description || !amount || !target}
+        disabled={
+          !isTop ||
+          busy ||
+          isOnWrongChain ||
+          !inputsComplete ||
+          exceedsTreasury ||
+          !!simError ||
+          isSimulating
+        }
       >
-        Submit
+        {isSimulating ? 'Simulating…' : 'Submit'}
       </button>
     </div>
   );
