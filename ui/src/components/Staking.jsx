@@ -172,9 +172,9 @@ export default function Staking() {
   // Reward-token amounts — uses the on-chain decimals (pHEX = 8). Default
   // to 4 fraction digits for headline numbers; pass more for the user's
   // live "earned" counter so small drip amounts don't round to zero.
-  // When `pad` is true, we also force `minimumFractionDigits` so trailing
-  // zeros stay visible — otherwise `toLocaleString` collapses
-  // `0.00000000` down to `0` and you can't see the counter tick.
+  // When `pad` is true, trailing zeros stay visible so the counter
+  // always shows the full decimal column (otherwise `toLocaleString`
+  // collapses `0.00000000` down to `0` and you can't see it tick).
   const fmtRwd = (val, frac = 4, pad = false) => {
     if (val === undefined || val === null) return '...';
     return Number(formatUnits(val, rwdDec)).toLocaleString(undefined, {
@@ -182,6 +182,22 @@ export default function Staking() {
       minimumFractionDigits: pad ? frac : 0,
     });
   };
+  // Fixed-precision string formatter. Uses viem's formatUnits to get an
+  // exact decimal string (no JS float rounding), then pads/truncates to
+  // `places` fraction digits and adds thousands separators on the integer
+  // side. We call this with 18 for the on-screen counters so users can
+  // see even the smallest drip movements — pHEX only has 8 real decimals
+  // of precision so positions 9–18 will always be trailing zeros, which
+  // is expected.
+  const fmtExact = (val, decimals, places = 18) => {
+    if (val === undefined || val === null) return '...';
+    const s = formatUnits(val, decimals);
+    const [whole, fracIn = ''] = s.split('.');
+    const frac = (fracIn + '0'.repeat(places)).slice(0, places);
+    const wholeFmt = Number(whole).toLocaleString();
+    return `${wholeFmt}.${frac}`;
+  };
+  const fmtRwdExact = (val, places = 18) => fmtExact(val, rwdDec, places);
 
   return (
     <div className="card">
@@ -208,6 +224,24 @@ export default function Staking() {
         </div>
       )}
 
+      {/* Pending-swap banner — raw PLS sitting on the vault from recent
+          tax forwards. Auto-swaps to pHEX on the next stake/withdraw/
+          getReward via the autoProcess modifier. Rendered prominently
+          so users can watch the queue grow between triggers. */}
+      <div
+        className="apr-banner"
+        style={{ background: 'linear-gradient(135deg, rgba(59,130,246,0.15), rgba(124,58,237,0.10))', borderColor: 'rgba(59,130,246,0.3)' }}
+        title="Raw PLS sitting on the vault from recent sell taxes. On the next stake/withdraw/claim, autoProcess swaps it to pHEX and (if it clears the dust threshold) extends the drip."
+      >
+        <span className="apr-label">Pending swap → pHEX</span>
+        <span className="apr-value" style={{ color: 'var(--blue)', fontSize: 14, wordBreak: 'break-all' }}>
+          {vaultPlsBal ? fmtExact(vaultPlsBal.value, 18, 18) : '...'} <TokenIcon symbol="PLS" />PLS
+        </span>
+        <span className="apr-note">
+          Fires automatically on the next stake / withdraw / claim. Needs ≥ 604,800 wei pHEX after swap to restart the drip.
+        </span>
+      </div>
+
       <div className="stats-grid">
         <div className="stat-box">
           <span className="stat-label">Total Staked</span>
@@ -221,17 +255,6 @@ export default function Staking() {
           <span className="stat-label">Ends In</span>
           <span className="stat-value">{isActive ? formatCountdown(timeLeft) : '—'}</span>
         </div>
-        <div
-          className="stat-box"
-          title="Raw PLS sitting on the vault from recent taxes. On the next stake/withdraw/claim it auto-swaps to pHEX and extends the drip (if it clears the dust threshold)."
-        >
-          <span className="stat-label">Pending swap → pHEX</span>
-          <span className="stat-value">
-            {vaultPlsBal
-              ? Number(formatEther(vaultPlsBal.value)).toLocaleString(undefined, { maximumFractionDigits: 6 })
-              : '...'} <TokenIcon symbol="PLS" />PLS
-          </span>
-        </div>
       </div>
 
       {/* User stats — always shown, empty when disconnected */}
@@ -243,7 +266,12 @@ export default function Staking() {
         </div>
         <div className="stat-box">
           <span className="stat-label">Earned</span>
-          <span className="stat-value highlight-green">{address ? fmtRwd(earnedRaw, rwdDec, true) : '—'} <TokenIcon symbol={rwdSymbol} />{rwdSymbol}</span>
+          <span
+            className="stat-value highlight-green"
+            style={{ fontSize: 11, wordBreak: 'break-all' }}
+          >
+            {address ? fmtRwdExact(earnedRaw, 18) : '—'} <TokenIcon symbol={rwdSymbol} />{rwdSymbol}
+          </span>
         </div>
         <div className="stat-box">
           <span className="stat-label">Wallet</span>
