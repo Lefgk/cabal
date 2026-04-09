@@ -158,9 +158,15 @@ export default function Staking() {
   // Reward-token amounts — uses the on-chain decimals (pHEX = 8). Default
   // to 4 fraction digits for headline numbers; pass more for the user's
   // live "earned" counter so small drip amounts don't round to zero.
-  const fmtRwd = (val, frac = 4) => {
+  // When `pad` is true, we also force `minimumFractionDigits` so trailing
+  // zeros stay visible — otherwise `toLocaleString` collapses
+  // `0.00000000` down to `0` and you can't see the counter tick.
+  const fmtRwd = (val, frac = 4, pad = false) => {
     if (val === undefined || val === null) return '...';
-    return Number(formatUnits(val, rwdDec)).toLocaleString(undefined, { maximumFractionDigits: frac });
+    return Number(formatUnits(val, rwdDec)).toLocaleString(undefined, {
+      maximumFractionDigits: frac,
+      minimumFractionDigits: pad ? frac : 0,
+    });
   };
 
   return (
@@ -216,7 +222,7 @@ export default function Staking() {
         </div>
         <div className="stat-box">
           <span className="stat-label">Earned</span>
-          <span className="stat-value highlight-green">{address ? fmtRwd(earnedRaw, rwdDec) : '—'} <TokenIcon symbol={rwdSymbol} />{rwdSymbol}</span>
+          <span className="stat-value highlight-green">{address ? fmtRwd(earnedRaw, rwdDec, true) : '—'} <TokenIcon symbol={rwdSymbol} />{rwdSymbol}</span>
         </div>
         <div className="stat-box">
           <span className="stat-label">Wallet</span>
