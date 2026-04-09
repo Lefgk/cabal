@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useAccount } from 'wagmi';
-import { useReadContract, useSafeWriteContract } from '../hooks/usePls.js';
+import { useReadContract, useSafeWriteContract, useBalance } from '../hooks/usePls.js';
 import { formatEther, formatUnits, parseEther, maxUint256 } from 'viem';
 import { ADDRESSES } from '../config/contracts.js';
 import { STAKING_VAULT_ABI, ERC20_ABI } from '../config/abis.js';
@@ -102,6 +102,14 @@ export default function Staking() {
     address: tokenAddr, abi: ERC20_ABI, functionName: 'balanceOf',
     args: [address], query: { enabled: !!address },
   });
+  // Raw PLS sitting on the vault — queued for the next autoProcess swap.
+  // Taxes arrive here from buys/sells and stay until the next
+  // stake/withdraw/getReward touches the vault. Polled every 10s so
+  // users can watch pending taxes grow in real time.
+  const { data: vaultPlsBal } = useBalance({
+    address: vaultAddr,
+    query: { refetchInterval: 10000 },
+  });
 
   // Derived values — tick `now` every second so the countdown updates live
   const [now, setNow] = useState(Math.floor(Date.now() / 1000));
@@ -195,7 +203,7 @@ export default function Staking() {
         <div className="apr-banner">
           <span className="apr-label">Current {durationLabel} Emission</span>
           <span className="apr-value">
-            {fmtRwd(getRewardForDuration)} <TokenIcon symbol={rwdSymbol} />{rwdSymbol}
+            {fmtRwd(getRewardForDuration, rwdDec)} <TokenIcon symbol={rwdSymbol} />{rwdSymbol}
           </span>
         </div>
       )}
@@ -212,6 +220,17 @@ export default function Staking() {
         <div className="stat-box">
           <span className="stat-label">Ends In</span>
           <span className="stat-value">{isActive ? formatCountdown(timeLeft) : '—'}</span>
+        </div>
+        <div
+          className="stat-box"
+          title="Raw PLS sitting on the vault from recent taxes. On the next stake/withdraw/claim it auto-swaps to pHEX and extends the drip (if it clears the dust threshold)."
+        >
+          <span className="stat-label">Pending swap → pHEX</span>
+          <span className="stat-value">
+            {vaultPlsBal
+              ? Number(formatEther(vaultPlsBal.value)).toLocaleString(undefined, { maximumFractionDigits: 6 })
+              : '...'} <TokenIcon symbol="PLS" />PLS
+          </span>
         </div>
       </div>
 

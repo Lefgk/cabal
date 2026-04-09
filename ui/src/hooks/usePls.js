@@ -19,6 +19,7 @@ import {
   useReadContract as useWagmiReadContract,
   useReadContracts as useWagmiReadContracts,
   useWriteContract as useWagmiWriteContract,
+  useBalance as useWagmiBalance,
   useWaitForTransactionReceipt,
   useAccount,
   useChainId,
@@ -29,6 +30,10 @@ import { PULSECHAIN_ID } from '../config/wagmi.js';
 
 export function useReadContract(args) {
   return useWagmiReadContract({ ...args, chainId: PULSECHAIN_ID });
+}
+
+export function useBalance(args) {
+  return useWagmiBalance({ ...args, chainId: PULSECHAIN_ID });
 }
 
 export function useReadContracts(args) {
