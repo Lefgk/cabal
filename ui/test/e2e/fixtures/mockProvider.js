@@ -26,6 +26,10 @@ export const MOCK_PROVIDER_SOURCE = `
   window.__SENT_TXS__ = sentTxs;
   window.__RPC_LOG__ = rpcLog;
   window.__MOCK_READY__ = true;
+  // Tell useSafeWriteContract to skip its eth_call preflight. Real on-chain
+  // state for the mock account won't pass every simulation (e.g. stake
+  // without allowance), but the tests only need to assert the tx shape.
+  window.__TEST_SKIP_SIM__ = true;
 
   let rpcIdx = 0;
   async function rpcForward(method, params) {

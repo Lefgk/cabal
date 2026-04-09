@@ -23,10 +23,36 @@ import {
   useWaitForTransactionReceipt,
   useAccount,
   useChainId,
+  usePublicClient,
 } from 'wagmi';
 import { useQueryClient } from '@tanstack/react-query';
-import { useCallback, useEffect } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { PULSECHAIN_ID } from '../config/wagmi.js';
+
+// Best-effort chain-id → human name mapping so we can tell users *which*
+// wrong chain their wallet is on (instead of just "wrong chain"). Covers
+// the top 10 EVM chains — if we get a hit it helps the user fix their
+// wallet; if we miss, we fall back to the numeric id.
+const CHAIN_NAMES = {
+  1: 'Ethereum',
+  10: 'Optimism',
+  56: 'BNB Smart Chain',
+  100: 'Gnosis',
+  137: 'Polygon',
+  250: 'Fantom',
+  369: 'PulseChain',
+  8453: 'Base',
+  42161: 'Arbitrum One',
+  43114: 'Avalanche',
+  59144: 'Linea',
+  534352: 'Scroll',
+  11155111: 'Sepolia',
+};
+
+export function chainName(id) {
+  if (!id) return null;
+  return CHAIN_NAMES[id] || `Chain ${id}`;
+}
 
 export function useReadContract(args) {
   return useWagmiReadContract({ ...args, chainId: PULSECHAIN_ID });
@@ -56,22 +82,51 @@ export function useIsPulseChain() {
   return chainId === PULSECHAIN_ID;
 }
 
+/// Expose the wallet's currently connected chain for display. Returns:
+///   - `chainId`      : raw numeric id from the wallet, or null if disconnected
+///   - `chainName`    : human name if we recognise it, else "Chain N"
+///   - `isConnected`  : wallet is plugged in
+///   - `isPulseChain` : wallet is on 369
+export function useConnectedChain() {
+  const { isConnected } = useAccount();
+  const chainId = useChainId();
+  return {
+    chainId: isConnected ? chainId : null,
+    chainName: isConnected ? chainName(chainId) : null,
+    isConnected,
+    isPulseChain: !isConnected || chainId === PULSECHAIN_ID,
+  };
+}
+
 /// Drop-in replacement for `useWriteContract` that:
 ///   1. pins every call to PulseChain (wagmi will refuse to broadcast on
 ///      any other chain and will prompt the wallet to switch),
-///   2. watches the tx receipt and, once it confirms, invalidates the
+///   2. SIMULATES the call via `publicClient.simulateContract` before
+///      sending so a would-be-reverting tx surfaces its revert reason in
+///      the UI instead of the user signing a doomed transaction,
+///   3. watches the tx receipt and, once it confirms, invalidates the
 ///      whole react-query cache so every `useReadContract` auto-refetches.
 ///      This means staking / balance / proposal lists update as soon as
 ///      any transaction mines, with no manual refresh.
 /// Also exposes:
-///   - `hash`       : last submitted tx hash
-///   - `isMining`   : submitted but not yet mined
-///   - `isConfirmed`: mined successfully at least once this session
+///   - `hash`          : last submitted tx hash
+///   - `isSimulating`  : eth_call preflight in flight
+///   - `isMining`      : submitted but not yet mined
+///   - `isConfirmed`   : mined successfully at least once this session
 ///   - `isOnWrongChain`: wallet is connected to a chain ≠ 369
+///   - `txError`       : unified error from simulate / submit / receipt
 export function useSafeWriteContract() {
   const base = useWagmiWriteContract();
   const isOnPulseChain = useIsPulseChain();
   const queryClient = useQueryClient();
+  const { address } = useAccount();
+  // Always use the PulseChain publicClient regardless of wallet chain, so
+  // simulation queries the right state even if the wallet is stuck on
+  // Ethereum mid-switch.
+  const publicClient = usePublicClient({ chainId: PULSECHAIN_ID });
+
+  const [simError, setSimError] = useState(null);
+  const [isSimulating, setIsSimulating] = useState(false);
 
   const {
     isLoading: isMining,
@@ -92,25 +147,82 @@ export function useSafeWriteContract() {
     }
   }, [isConfirmed, queryClient]);
 
-  const writeContract = useCallback(
-    (args) => base.writeContract({ chainId: PULSECHAIN_ID, ...args }),
-    [base],
-  );
-  const writeContractAsync = useCallback(
-    (args) => base.writeContractAsync({ chainId: PULSECHAIN_ID, ...args }),
-    [base],
+  // Preflight: run eth_call against the PulseChain node with `account` set
+  // to the connected wallet. If it would revert, surface the error and
+  // return false so the caller aborts before we ever prompt the wallet.
+  //
+  // Test escape hatch: when running under Playwright, the mock provider
+  // uses a real on-chain account that doesn't have matching approvals /
+  // balances / governance power for every spec. Setting
+  // `window.__TEST_SKIP_SIM__ = true` before boot lets tests skip the
+  // preflight and assert the raw tx shape. Production code never sets
+  // this flag.
+  const simulate = useCallback(
+    async (args) => {
+      if (
+        typeof window !== 'undefined' &&
+        window.__TEST_SKIP_SIM__ === true
+      ) {
+        return { ok: true };
+      }
+      if (!publicClient) return { ok: true }; // no client → skip, trust wallet
+      if (!address) {
+        const err = new Error('Wallet not connected');
+        setSimError(err);
+        return { ok: false, error: err };
+      }
+      setIsSimulating(true);
+      setSimError(null);
+      try {
+        await publicClient.simulateContract({
+          account: address,
+          chainId: PULSECHAIN_ID,
+          ...args,
+        });
+        return { ok: true };
+      } catch (err) {
+        setSimError(err);
+        return { ok: false, error: err };
+      } finally {
+        setIsSimulating(false);
+      }
+    },
+    [publicClient, address],
   );
 
-  // Combine submission errors (from wallet rejection / simulation / etc)
-  // with receipt errors (the tx actually reverted on-chain). Callers get
-  // one field to render.
-  const txError = base.error || receiptError || null;
+  const writeContract = useCallback(
+    async (args) => {
+      const sim = await simulate(args);
+      if (!sim.ok) return;
+      return base.writeContract({ chainId: PULSECHAIN_ID, ...args });
+    },
+    [base, simulate],
+  );
+  const writeContractAsync = useCallback(
+    async (args) => {
+      const sim = await simulate(args);
+      if (!sim.ok) throw sim.error;
+      return base.writeContractAsync({ chainId: PULSECHAIN_ID, ...args });
+    },
+    [base, simulate],
+  );
+
+  // Clear simulation error as soon as a new submission succeeds, so stale
+  // reverts don't hang around after the user fixes the inputs.
+  useEffect(() => {
+    if (base.data) setSimError(null);
+  }, [base.data]);
+
+  // Unified error for the UI: simulation → submission → on-chain receipt.
+  // Simulation gets priority because it's the earliest + most specific.
+  const txError = simError || base.error || receiptError || null;
 
   return {
     ...base,
     writeContract,
     writeContractAsync,
     hash: base.data,
+    isSimulating,
     isMining,
     isConfirmed,
     isOnWrongChain: !isOnPulseChain,

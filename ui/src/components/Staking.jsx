@@ -1,6 +1,12 @@
 import { useState, useEffect } from 'react';
 import { useAccount } from 'wagmi';
-import { useReadContract, useSafeWriteContract, useBalance } from '../hooks/usePls.js';
+import {
+  useReadContract,
+  useSafeWriteContract,
+  useBalance,
+  useConnectedChain,
+  prettyError,
+} from '../hooks/usePls.js';
 import { formatEther, formatUnits, parseEther, maxUint256 } from 'viem';
 import { ADDRESSES } from '../config/contracts.js';
 import { STAKING_VAULT_ABI, ERC20_ABI } from '../config/abis.js';
@@ -37,10 +43,13 @@ export default function Staking() {
   const {
     writeContract,
     isPending: isWriting,
+    isSimulating,
     isMining,
     isOnWrongChain,
+    txError,
   } = useSafeWriteContract();
-  const busy = isWriting || isMining;
+  const busy = isWriting || isSimulating || isMining;
+  const chain = useConnectedChain();
 
   // Global reads (no wallet needed)
   const { data: totalStaked } = useReadContract({
@@ -134,6 +143,22 @@ export default function Staking() {
   // Duration label
   const durationLabel = rewardsDuration ? `${Number(rewardsDuration) / 86400}d` : '...';
 
+  // Dust-drip detector: Synthetix-style rewardPerToken uses 1e18 fixed-point
+  // scaling, so the per-second delta is `rewardRate * 1e18 / totalStaked`.
+  // If that's < 1, integer truncation floors it to 0 and `earned()` stays at
+  // 0 for every staker until ~`totalStaked / (rewardRate * 1e18)` seconds
+  // have elapsed. Contract is fine — seed is just too small for current
+  // stake depth. Flag it so users understand why Claimable isn't ticking.
+  const dustDrip = (() => {
+    if (!rewardRate || !totalStaked || !isActive) return null;
+    if (rewardRate === 0n || totalStaked === 0n) return null;
+    const scaled = rewardRate * 10n ** 18n;
+    if (scaled >= totalStaked) return null; // tick ≥ 1 wei/sec, healthy
+    // Seconds until rewardPerToken ticks up by 1 wei
+    const secsPerTick = totalStaked / scaled;
+    return { secsPerTick };
+  })();
+
   // Only flag as needing approval when the user has entered a valid amount
   // that exceeds the current allowance. An empty input should NOT force the
   // button to "Approve" when the wallet is already max-approved.
@@ -211,6 +236,18 @@ export default function Staking() {
       <div className="section-header">
         <h2>Staking</h2>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          {chain.isConnected && (
+            <span
+              className={`badge ${chain.isPulseChain ? 'badge-active' : 'badge-defeated'}`}
+              title={
+                chain.isPulseChain
+                  ? `Wallet on ${chain.chainName} (${chain.chainId})`
+                  : `Wallet on ${chain.chainName} (${chain.chainId}) — writes will be rejected. Switch to PulseChain (369).`
+              }
+            >
+              {chain.isPulseChain ? '● ' : '⚠ '}{chain.chainName}
+            </span>
+          )}
           {isTop && <span className="top-staker-badge">Top Staker</span>}
           <span className={`badge ${isActive ? 'badge-active' : 'badge-defeated'}`}>
             {isActive ? 'Active' : 'Inactive'}
@@ -227,6 +264,42 @@ export default function Staking() {
           <span className="apr-label">Current {durationLabel} Emission</span>
           <span className="apr-value">
             {fmtRwd(getRewardForDuration, rwdDec)} <TokenIcon symbol={rwdSymbol} />{rwdSymbol}
+          </span>
+        </div>
+      )}
+
+      {/* Dust-drip warning — drip is technically active but rewardRate is so
+          small vs totalStaked that `rewardPerToken` integer-divides to 0 and
+          Claimable will sit at 0 until enough time elapses for the fixed-point
+          math to tick. Standard Synthetix pitfall on under-seeded vaults. */}
+      {dustDrip && (
+        <div
+          className="apr-banner"
+          style={{
+            background: 'linear-gradient(135deg, rgba(234,179,8,0.15), rgba(249,115,22,0.10))',
+            borderColor: 'rgba(234,179,8,0.4)',
+          }}
+          title="Synthetix-style rewardPerToken uses 1e18 fixed-point scaling. When rewardRate × 1e18 < totalStaked, the per-second delta floors to 0 and earned() stays at 0 until enough seconds elapse to tick the integer. Fix: top up the drip."
+        >
+          <span className="apr-label" style={{ color: '#eab308' }}>
+            ⚠ Drip below precision
+          </span>
+          <span className="apr-value" style={{ color: '#eab308', fontSize: 13 }}>
+            Claimable stuck at 0 — ticks every{' '}
+            {dustDrip.secsPerTick >= 86400n
+              ? `${Number(dustDrip.secsPerTick / 86400n)}d`
+              : dustDrip.secsPerTick >= 3600n
+                ? `${Number(dustDrip.secsPerTick / 3600n)}h`
+                : `${Number(dustDrip.secsPerTick)}s`}
+          </span>
+          <span className="apr-note">
+            Drip is active and funded, but the reward rate ({rewardRate?.toString()} wei pHEX/sec)
+            is too small vs total staked ({fmt(totalStaked)} {stkSymbol}) for Solidity's
+            fixed-point math to represent per-second accrual. Counter will remain 0 until
+            ~{dustDrip.secsPerTick >= 86400n
+              ? `${Number(dustDrip.secsPerTick / 86400n)} day(s)`
+              : `${Number(dustDrip.secsPerTick / 3600n)} hour(s)`}{' '}
+            from the last notify. Top up the drip with more pHEX to fix.
           </span>
         </div>
       )}
@@ -284,24 +357,15 @@ export default function Staking() {
         </div>
         <div
           className="stat-box"
-          title="Your claimable rewards right now. Click 'Claim Rewards' below to withdraw this amount."
+          title="Your claimable rewards right now, full 18-decimal precision. Click 'Claim Rewards' below to withdraw this amount."
         >
           <span className="stat-label">Claimable</span>
           <span
             className="stat-value highlight-green"
-            style={{ fontSize: 14 }}
+            style={{ fontSize: 11, wordBreak: 'break-all' }}
           >
-            {address ? fmtRwd(earnedRaw, 8, true) : '—'} <TokenIcon symbol={rwdSymbol} />{rwdSymbol}
+            {address ? fmtRwdExact(earnedRaw, 18) : '—'} <TokenIcon symbol={rwdSymbol} />{rwdSymbol}
           </span>
-          {address && earnedRaw !== undefined && earnedRaw > 0n && (
-            <span
-              className="stat-label"
-              style={{ fontSize: 10, marginTop: 2, opacity: 0.7, wordBreak: 'break-all' }}
-              title="Full wei precision"
-            >
-              {fmtRwdExact(earnedRaw, 18)}
-            </span>
-          )}
         </div>
         <div className="stat-box">
           <span className="stat-label">Wallet</span>
@@ -333,11 +397,32 @@ export default function Staking() {
       )}
       {address && isOnWrongChain && (
         <p className="help-text" style={{ marginTop: 8, color: 'var(--danger, #c33)' }}>
-          Switch your wallet to PulseChain (369) to stake.
+          Switch your wallet to PulseChain (369) to stake. Currently on{' '}
+          {chain.chainName || 'an unknown chain'}.
         </p>
+      )}
+      {isSimulating && (
+        <p className="help-text" style={{ marginTop: 8 }}>Simulating transaction…</p>
       )}
       {isMining && (
         <p className="help-text" style={{ marginTop: 8 }}>Waiting for confirmation…</p>
+      )}
+      {txError && (
+        <p
+          className="help-text"
+          style={{
+            marginTop: 8,
+            padding: '8px 10px',
+            border: '1px solid rgba(220,38,38,0.35)',
+            background: 'rgba(220,38,38,0.08)',
+            borderRadius: 6,
+            color: 'var(--danger, #c33)',
+            wordBreak: 'break-word',
+          }}
+          title="Error from simulation / wallet / on-chain revert"
+        >
+          ⚠ {prettyError(txError)}
+        </p>
       )}
 
       {/* Top Stakers */}
