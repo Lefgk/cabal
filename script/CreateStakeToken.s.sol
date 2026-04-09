@@ -7,7 +7,9 @@ import "forge-std/Script.sol";
 ///         PulseFun v3 TokenFactoryTax, preserving ALL original parameters:
 ///         name, symbol, decimals (18 fixed), supply, and the full 5-tax set.
 ///
-/// Live state being mirrored (source: 0x3cbc78a25929b3f8f7d0a347565e8d77aee49554):
+/// Resulting live TSTT:   0xAbEaBFE146F347537b82426B4c4d8F1E768721C7
+/// (Historical parameter source was the pre-migration v2 clone; no longer relevant.)
+///
 ///   name           testt
 ///   symbol         TSTT
 ///   initialSupply  1,000,000,000 * 1e18
@@ -36,7 +38,7 @@ contract CreateStakeTokenScript is Script {
     address constant SMART_TRADER_V2 = 0xcaE394005c9C4C309621c53d53DB9cEB701fc8d8;
 
     // ── Tax receivers / token refs pulled from the live TSTT ──────────────
-    address constant STAKING_VAULT       = 0xdc46ED9f6e57A899a2c558b2EF46d6f6f0369C93;
+    address constant STAKING_VAULT       = 0xDb15ee3255E7158f1823220D73f1403c18b474E6;
     address constant eHEX                = 0x57fde0a71132198BBeC939B98976993d8D89D225;
     address constant DEV_WALLET          = 0xa0419404eF7b81d9Ec64367eb68e5f425EACE618;
     address constant EXT_BURN_TOKEN      = 0x90F055196778e541018482213Ca50648cEA1a050;

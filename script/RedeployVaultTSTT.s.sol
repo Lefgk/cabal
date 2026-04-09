@@ -11,7 +11,7 @@ import {StakingVault} from "../src/StakingVault.sol";
 ///         so this requires a fresh deploy.
 contract RedeployVaultTSTTScript is Script {
     address constant TSTT          = 0xAbEaBFE146F347537b82426B4c4d8F1E768721C7;
-    address constant DAO           = 0x40E5B727227d45eCe9be9c48d40430A67A15b60C;
+    address constant DAO           = 0xd5111466E0C18FE374598B65e9c93e03c2BA7F43;
     address constant PULSEX_ROUTER = 0x165C3410fC91EF562C50559f7d2289fEbed552d9;
     address constant DEV_WALLET    = 0xa0419404eF7b81d9Ec64367eb68e5f425EACE618;
 
