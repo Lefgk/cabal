@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useAccount, useWriteContract } from 'wagmi';
 import { useReadContract } from '../hooks/usePls.js';
 import { formatEther, formatUnits, parseEther, maxUint256 } from 'viem';
@@ -78,9 +78,11 @@ export default function Staking() {
     address: vaultAddr, abi: STAKING_VAULT_ABI, functionName: 'stakedBalance',
     args: [address], query: { enabled: !!address },
   });
+  // Poll earned every 5s so the counter ticks up in real time on public RPC
+  // (which doesn't push block events reliably).
   const { data: earnedRaw } = useReadContract({
     address: vaultAddr, abi: STAKING_VAULT_ABI, functionName: 'earned',
-    args: [address], query: { enabled: !!address },
+    args: [address], query: { enabled: !!address, refetchInterval: 5000 },
   });
   const { data: isTop } = useReadContract({
     address: vaultAddr, abi: STAKING_VAULT_ABI, functionName: 'isTopStaker',
@@ -95,8 +97,12 @@ export default function Staking() {
     args: [address], query: { enabled: !!address },
   });
 
-  // Derived values
-  const now = Math.floor(Date.now() / 1000);
+  // Derived values — tick `now` every second so the countdown updates live
+  const [now, setNow] = useState(Math.floor(Date.now() / 1000));
+  useEffect(() => {
+    const id = setInterval(() => setNow(Math.floor(Date.now() / 1000)), 1000);
+    return () => clearInterval(id);
+  }, []);
   const timeLeft = periodFinish ? Number(periodFinish) - now : 0;
   const isActive = timeLeft > 0;
   const rwdSymbol = displaySymbol(rewardsTokenSymbol) || 'RWD';
@@ -114,9 +120,14 @@ export default function Staking() {
   // Duration label
   const durationLabel = rewardsDuration ? `${Number(rewardsDuration) / 86400}d` : '...';
 
+  // Only flag as needing approval when the user has entered a valid amount
+  // that exceeds the current allowance. An empty input should NOT force the
+  // button to "Approve" when the wallet is already max-approved.
   const needsApproval = (() => {
-    if (!stakeAmount || !allowance) return true;
-    try { return parseEther(stakeAmount) > allowance; } catch { return true; }
+    if (!stakeAmount) return false;
+    let wanted;
+    try { wanted = parseEther(stakeAmount); } catch { return false; }
+    return (allowance ?? 0n) < wanted;
   })();
 
   const handleApprove = () => {
@@ -144,10 +155,12 @@ export default function Staking() {
     if (val === undefined || val === null) return '...';
     return Number(formatEther(val)).toLocaleString(undefined, { maximumFractionDigits: 4 });
   };
-  // Reward-token amounts — uses the on-chain decimals (pHEX = 8)
-  const fmtRwd = (val) => {
+  // Reward-token amounts — uses the on-chain decimals (pHEX = 8). Default
+  // to 4 fraction digits for headline numbers; pass more for the user's
+  // live "earned" counter so small drip amounts don't round to zero.
+  const fmtRwd = (val, frac = 4) => {
     if (val === undefined || val === null) return '...';
-    return Number(formatUnits(val, rwdDec)).toLocaleString(undefined, { maximumFractionDigits: 4 });
+    return Number(formatUnits(val, rwdDec)).toLocaleString(undefined, { maximumFractionDigits: frac });
   };
 
   return (
@@ -203,7 +216,7 @@ export default function Staking() {
         </div>
         <div className="stat-box">
           <span className="stat-label">Earned</span>
-          <span className="stat-value highlight-green">{address ? fmtRwd(earnedRaw) : '—'} <TokenIcon symbol={rwdSymbol} />{rwdSymbol}</span>
+          <span className="stat-value highlight-green">{address ? fmtRwd(earnedRaw, rwdDec) : '—'} <TokenIcon symbol={rwdSymbol} />{rwdSymbol}</span>
         </div>
         <div className="stat-box">
           <span className="stat-label">Wallet</span>
