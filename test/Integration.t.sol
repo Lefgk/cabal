@@ -583,6 +583,84 @@ contract VaultDAOIntegrationTest is Test {
     }
 
     // ---------------------------------------------------------------
+    //  Auto-process: stake / withdraw / getReward should self-heal the
+    //  drip without requiring a separate processRewards() call.
+    // ---------------------------------------------------------------
+
+    function test_autoProcess_stakeTriggersDripOnFreshTax() public {
+        // Alice is already staked. Tax accumulates in the vault.
+        _fundAndApprove(alice, 1_000e18);
+        vm.prank(alice);
+        vault.stake(1_000e18);
+
+        // Generate tax without touching the vault directly.
+        tstt.transfer(carol, 30_000e18);
+        vm.prank(carol);
+        tstt.transfer(pair, 10_000e18);
+        uint256 tax1 = (10_000e18 * TAX_BPS) / BPS;
+
+        // Drip has NOT started yet — no processRewards was called.
+        assertEq(vault.periodFinish(), 0);
+        assertEq(vault.rewardRate(), 0);
+
+        // Bob stakes — his stake should auto-pick-up tax1 and start the drip.
+        _fundAndApprove(bob, 500e18);
+        vm.prank(bob);
+        vault.stake(500e18);
+
+        assertGt(vault.periodFinish(), block.timestamp);
+        assertGt(vault.rewardRate(), 0);
+        // Rate ≈ tax1 / 7d.
+        uint256 expectedRate = tax1 / SEVEN_DAYS;
+        assertApproxEqAbs(vault.rewardRate(), expectedRate, expectedRate / 100);
+    }
+
+    function test_autoProcess_getRewardTriggersDrip() public {
+        _fundAndApprove(alice, 1_000e18);
+        vm.prank(alice);
+        vault.stake(1_000e18);
+
+        tstt.transfer(carol, 20_000e18);
+        vm.prank(carol);
+        tstt.transfer(pair, 10_000e18);
+
+        assertEq(vault.periodFinish(), 0);
+
+        // Alice calls getReward on a cold vault. autoProcess kicks in and
+        // starts the drip — she won't have anything to claim THIS tx, but
+        // the drip is now live for the next 7 days.
+        vm.prank(alice);
+        vault.getReward();
+
+        assertGt(vault.periodFinish(), block.timestamp);
+        assertGt(vault.rewardRate(), 0);
+    }
+
+    function test_autoProcess_idempotent_noSpuriousExtend() public {
+        _fundAndApprove(alice, 1_000e18);
+        vm.prank(alice);
+        vault.stake(1_000e18);
+
+        // One tax event, one processRewards, real period set.
+        tstt.transfer(carol, 20_000e18);
+        vm.prank(carol);
+        tstt.transfer(pair, 10_000e18);
+        vault.processRewards();
+        uint256 finishAfterFirst = vault.periodFinish();
+
+        // Warp partway through, then stake with a SECOND staker without any
+        // new tax. autoProcess must NOT extend the period (dust guard).
+        vm.warp(block.timestamp + 2 days);
+
+        _fundAndApprove(bob, 500e18);
+        vm.prank(bob);
+        vault.stake(500e18);
+
+        // periodFinish unchanged — no fresh drip was started.
+        assertEq(vault.periodFinish(), finishAfterFirst);
+    }
+
+    // ---------------------------------------------------------------
     //  Reward payout is tax-free because the vault is excluded.
     // ---------------------------------------------------------------
 

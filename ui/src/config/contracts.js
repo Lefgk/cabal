@@ -1,7 +1,7 @@
 export const CHAIN_ID = 369;
 
 export const ADDRESSES = {
-  stakingVault: '0x993F54af4E7a3ed0d9abC13cF7Eb1E8De9C495a6',
+  stakingVault: '0xdb15Ee3255E7158F1823220D73F1403C18b474E6',
   treasuryDAO: '0x40E5B727227d45eCe9be9c48d40430A67A15b60C',
   stakeToken: '0xAbEaBFE146F347537b82426B4c4d8F1E768721C7',
 };

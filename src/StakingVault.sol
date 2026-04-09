@@ -106,6 +106,18 @@ contract StakingVault is IStakingVault, Ownable, ReentrancyGuard {
         _;
     }
 
+    /// @notice Runs before `updateReward` in user-facing entry points so that
+    ///         any tax tokens the factory has dropped into the vault since the
+    ///         last touch are folded into the drip before per-account math.
+    ///         This is the self-healing equivalent of ZKP's
+    ///         `stakingContract.topUp{value: pls}()` callback — since our v3
+    ///         factory token can't call back into the vault, every stake /
+    ///         withdraw / getReward picks up new taxes on behalf of stakers.
+    modifier autoProcess() {
+        _processRewardsIfNew();
+        _;
+    }
+
     modifier updateReward(address account) {
         uint256 newRPT = rewardPerToken();
         // When supply is zero, rewardPerToken() returns stored unchanged so the
@@ -183,7 +195,7 @@ contract StakingVault is IStakingVault, Ownable, ReentrancyGuard {
     // Core staking
     // -------------------------------------------------------------------------
 
-    function stake(uint256 amount) external nonReentrant notPaused updateReward(msg.sender) {
+    function stake(uint256 amount) external nonReentrant notPaused autoProcess updateReward(msg.sender) {
         require(amount > 0, "StakingVault: zero stake");
 
         if (_balances[msg.sender] == 0) {
@@ -200,7 +212,7 @@ contract StakingVault is IStakingVault, Ownable, ReentrancyGuard {
         emit Staked(msg.sender, amount);
     }
 
-    function withdraw(uint256 amount) public nonReentrant updateReward(msg.sender) {
+    function withdraw(uint256 amount) public nonReentrant autoProcess updateReward(msg.sender) {
         require(amount > 0, "StakingVault: zero withdraw");
         require(_balances[msg.sender] >= amount, "StakingVault: insufficient balance");
 
@@ -219,7 +231,7 @@ contract StakingVault is IStakingVault, Ownable, ReentrancyGuard {
         emit Withdrawn(msg.sender, amount);
     }
 
-    function getReward() public nonReentrant updateReward(msg.sender) {
+    function getReward() public nonReentrant autoProcess updateReward(msg.sender) {
         uint256 reward = rewards[msg.sender];
         if (reward > 0) {
             rewards[msg.sender] = 0;
@@ -306,7 +318,32 @@ contract StakingVault is IStakingVault, Ownable, ReentrancyGuard {
     /// @notice Detects any excess reward tokens in the contract (sent by the
     ///         token factory tax system) and starts/extends the reward drip.
     ///         Anyone can call this — it simply processes already-received tokens.
-    function processRewards() external nonReentrant updateReward(address(0)) {
+    function processRewards() external nonReentrant {
+        uint256 oldPeriodFinish = periodFinish;
+        _processRewardsIfNew();
+        // Signal to callers that this was a no-op: useful for keepers /
+        // explicit triggers. User-facing entry points (stake / withdraw /
+        // getReward) use the internal helper directly and never revert.
+        require(
+            periodFinish > oldPeriodFinish,
+            "StakingVault: no new rewards"
+        );
+    }
+
+    /// @dev Snaps global reward state to `now`, then starts a new reward
+    ///      period if there are uncommitted reward tokens sitting in the
+    ///      vault. Safe to call repeatedly and safe to call when there is
+    ///      nothing to do (no revert on no-op).
+    function _processRewardsIfNew() internal {
+        // --- 1. Snap global state to now (same as updateReward(address(0))). ---
+        uint256 newRPT = rewardPerToken();
+        if (newRPT > rewardPerTokenStored && _totalSupply > 0) {
+            totalOwed += ((newRPT - rewardPerTokenStored) * _totalSupply) / 1e18;
+        }
+        rewardPerTokenStored = newRPT;
+        lastUpdateTime = lastTimeRewardApplicable();
+
+        // --- 2. Look for uncommitted reward tokens. ---
         uint256 balance = REWARDS_TOKEN.balanceOf(address(this));
         // When the staking token IS the reward token, the staked principal sits
         // in the same balance — exclude it so stakes can't be paid out as rewards.
@@ -314,21 +351,25 @@ contract StakingVault is IStakingVault, Ownable, ReentrancyGuard {
             balance -= _totalSupply;
         }
 
-        // committed = already-accrued (totalOwed, includes both materialized and
-        // unmaterialized) + still-to-drip portion of the current period.
         uint256 futureDrip;
         if (block.timestamp < periodFinish) {
             futureDrip = (periodFinish - block.timestamp) * rewardRate;
         }
         uint256 committed = totalOwed + futureDrip;
 
-        // Excess = balance minus committed rewards
-        require(balance > committed, "StakingVault: no new rewards");
-        uint256 reward = balance - committed;
-
-        _startRewardPeriod(reward);
-
-        emit RewardAdded(reward);
+        if (balance > committed) {
+            uint256 reward = balance - committed;
+            // Dust tolerance: the rewardPerToken / totalOwed math floor-divides
+            // and leaves ≤ O(rewardsDuration) wei of residual between committed
+            // and balance. Only restart the drip if the excess would produce a
+            // nonzero per-second rate (>= 1 wei / second). This also stops the
+            // autoProcess hook from spuriously extending periodFinish on every
+            // user action when no real tax has arrived.
+            if (reward >= rewardsDuration) {
+                _startRewardPeriod(reward);
+                emit RewardAdded(reward);
+            }
+        }
     }
 
     // -------------------------------------------------------------------------

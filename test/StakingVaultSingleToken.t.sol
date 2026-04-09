@@ -544,16 +544,21 @@ contract StakingVaultSingleTokenTest is Test {
         assertGe(paid, reward - SEVEN_DAYS);
     }
 
-    function test_singleToken_rewardPrecision_smallReward() public {
+    function test_singleToken_rewardPrecision_dustRejected() public {
         _stakeFor(alice, 1e18);
 
-        // Reward smaller than rewardsDuration → rewardRate = 0 → safety check passes
-        uint256 reward = SEVEN_DAYS - 1; // rounds to 0/sec
+        // Reward smaller than rewardsDuration would produce rewardRate = 0
+        // after integer division. The autoProcess dust guard rejects this
+        // (no point starting a zero-rate drip) and processRewards() reverts
+        // with "no new rewards" because nothing actually changed.
+        uint256 reward = SEVEN_DAYS - 1;
         token.mint(address(vault), reward);
+        vm.expectRevert("StakingVault: no new rewards");
         vault.processRewards();
 
-        // rewardRate should be 0 (integer division)
+        // State unchanged.
         assertEq(vault.rewardRate(), 0);
+        assertEq(vault.periodFinish(), 0);
     }
 
     // ---------------------------------------------------------------
