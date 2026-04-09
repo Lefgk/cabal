@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
-import { useAccount, useWriteContract } from 'wagmi';
-import { useReadContract } from '../hooks/usePls.js';
+import { useAccount } from 'wagmi';
+import { useReadContract, useSafeWriteContract } from '../hooks/usePls.js';
 import { formatEther, formatUnits, parseEther, maxUint256 } from 'viem';
 import { ADDRESSES } from '../config/contracts.js';
 import { STAKING_VAULT_ABI, ERC20_ABI } from '../config/abis.js';
@@ -34,7 +34,13 @@ export default function Staking() {
   const [withdrawAmount, setWithdrawAmount] = useState('');
   const [showTopStakers, setShowTopStakers] = useState(false);
 
-  const { writeContract, isPending: isWriting } = useWriteContract();
+  const {
+    writeContract,
+    isPending: isWriting,
+    isMining,
+    isOnWrongChain,
+  } = useSafeWriteContract();
+  const busy = isWriting || isMining;
 
   // Global reads (no wallet needed)
   const { data: totalStaked } = useReadContract({
@@ -204,10 +210,6 @@ export default function Staking() {
           <span className="stat-value">{totalStakers !== undefined ? Number(totalStakers).toLocaleString() : '...'}</span>
         </div>
         <div className="stat-box">
-          <span className="stat-label">This Period</span>
-          <span className="stat-value">{fmtRwd(getRewardForDuration)} <TokenIcon symbol={rwdSymbol} />{rwdSymbol}</span>
-        </div>
-        <div className="stat-box">
           <span className="stat-label">Ends In</span>
           <span className="stat-value">{isActive ? formatCountdown(timeLeft) : '—'}</span>
         </div>
@@ -233,24 +235,32 @@ export default function Staking() {
       <div className="input-group" style={{ marginTop: 16 }}>
         <input type="text" placeholder="Amount to stake" value={stakeAmount} onChange={(e) => setStakeAmount(e.target.value)} disabled={!address} />
         {needsApproval ? (
-          <button onClick={handleApprove} disabled={!address || isWriting}>Approve</button>
+          <button onClick={handleApprove} disabled={!address || busy || isOnWrongChain}>Approve</button>
         ) : (
-          <button onClick={handleStake} disabled={!address || isWriting || !stakeAmount}>Stake</button>
+          <button onClick={handleStake} disabled={!address || busy || isOnWrongChain || !stakeAmount}>Stake</button>
         )}
       </div>
 
       <div className="input-group">
         <input type="text" placeholder="Amount to withdraw" value={withdrawAmount} onChange={(e) => setWithdrawAmount(e.target.value)} disabled={!address} />
-        <button onClick={handleWithdraw} disabled={!address || isWriting || !withdrawAmount}>Withdraw</button>
+        <button onClick={handleWithdraw} disabled={!address || busy || isOnWrongChain || !withdrawAmount}>Withdraw</button>
       </div>
 
       <div className="input-group">
-        <button className="btn-green" onClick={handleClaim} disabled={!address || isWriting}>Claim Rewards</button>
-        <button className="btn-red" onClick={handleExit} disabled={!address || isWriting}>Exit (Withdraw All + Claim)</button>
+        <button className="btn-green" onClick={handleClaim} disabled={!address || busy || isOnWrongChain}>Claim Rewards</button>
+        <button className="btn-red" onClick={handleExit} disabled={!address || busy || isOnWrongChain}>Exit (Withdraw All + Claim)</button>
       </div>
 
       {!address && (
         <p className="help-text" style={{ marginTop: 8 }}>Connect wallet to stake.</p>
+      )}
+      {address && isOnWrongChain && (
+        <p className="help-text" style={{ marginTop: 8, color: 'var(--danger, #c33)' }}>
+          Switch your wallet to PulseChain (369) to stake.
+        </p>
+      )}
+      {isMining && (
+        <p className="help-text" style={{ marginTop: 8 }}>Waiting for confirmation…</p>
       )}
 
       {/* Top Stakers */}

@@ -1,6 +1,6 @@
 import { useState } from 'react';
-import { useAccount, useWriteContract } from 'wagmi';
-import { useReadContract, useReadContracts } from '../hooks/usePls.js';
+import { useAccount } from 'wagmi';
+import { useReadContract, useReadContracts, useSafeWriteContract } from '../hooks/usePls.js';
 import { formatEther, parseEther } from 'viem';
 import { ADDRESSES } from '../config/contracts.js';
 import { TREASURY_DAO_ABI, STAKING_VAULT_ABI } from '../config/abis.js';
@@ -27,7 +27,13 @@ const shortAddr = (a) => `${a.slice(0, 6)}…${a.slice(-4)}`;
 
 export default function Proposals() {
   const { address } = useAccount();
-  const { writeContract, isPending: isWriting } = useWriteContract();
+  const {
+    writeContract,
+    isPending: isWriting,
+    isMining,
+    isOnWrongChain,
+  } = useSafeWriteContract();
+  const busy = isWriting || isMining;
 
   const { data: isTop } = useReadContract({
     address: vaultAddr, abi: STAKING_VAULT_ABI, functionName: 'isTopStaker',
@@ -94,18 +100,33 @@ export default function Proposals() {
           key={Number(p.id)}
           proposal={p}
           address={address}
-          isWriting={isWriting}
+          busy={busy}
+          isOnWrongChain={isOnWrongChain}
           writeContract={writeContract}
           quorumRequired={quorumRequired}
         />
       ))}
 
-      <CreateProposalForm writeContract={writeContract} isWriting={isWriting} address={address} isTop={isTop} />
+      <CreateProposalForm
+        writeContract={writeContract}
+        busy={busy}
+        isOnWrongChain={isOnWrongChain}
+        address={address}
+        isTop={isTop}
+      />
+      {address && isOnWrongChain && (
+        <p className="help-text" style={{ marginTop: 8, color: 'var(--danger, #c33)' }}>
+          Switch your wallet to PulseChain (369) to vote or propose.
+        </p>
+      )}
+      {isMining && (
+        <p className="help-text" style={{ marginTop: 8 }}>Waiting for confirmation…</p>
+      )}
     </div>
   );
 }
 
-function ProposalCard({ proposal, address, isWriting, writeContract, quorumRequired }) {
+function ProposalCard({ proposal, address, busy, isOnWrongChain, writeContract, quorumRequired }) {
   const p = proposal;
   const [expanded, setExpanded] = useState(false);
 
@@ -186,9 +207,7 @@ function ProposalCard({ proposal, address, isWriting, writeContract, quorumRequi
       {expanded && (
         <div style={{ marginTop: 12, paddingTop: 12, borderTop: '1px solid var(--border)', fontSize: 12, color: 'var(--text)' }}>
           <div><strong>Proposer:</strong> <a href={`https://otter.pulsechain.com/address/${p.proposer}`} target="_blank" rel="noopener noreferrer" className="address-link" onClick={(e) => e.stopPropagation()}>{p.proposer}</a></div>
-          <div><strong>Target:</strong> <a href={`https://otter.pulsechain.com/address/${p.target}`} target="_blank" rel="noopener noreferrer" className="address-link" onClick={(e) => e.stopPropagation()}>{p.target}</a></div>
           <div><strong>Created:</strong> {fmtDate(p.startTime)}</div>
-          <div><strong>Voting ends:</strong> {fmtDate(p.endTime)}</div>
           <div><strong>Executed:</strong> {p.executed ? 'Yes' : 'No'}</div>
         </div>
       )}
@@ -196,8 +215,8 @@ function ProposalCard({ proposal, address, isWriting, writeContract, quorumRequi
       {/* Actions */}
       {isActive && !hasVoted && (
         <div className="vote-buttons" onClick={(e) => e.stopPropagation()}>
-          <button className="btn-green" onClick={() => handleVote(true)} disabled={!address || isWriting}>Vote Yes</button>
-          <button className="btn-red" onClick={() => handleVote(false)} disabled={!address || isWriting}>Vote No</button>
+          <button className="btn-green" onClick={() => handleVote(true)} disabled={!address || busy || isOnWrongChain}>Vote Yes</button>
+          <button className="btn-red" onClick={() => handleVote(false)} disabled={!address || busy || isOnWrongChain}>Vote No</button>
         </div>
       )}
       {isActive && hasVoted && (
@@ -207,7 +226,7 @@ function ProposalCard({ proposal, address, isWriting, writeContract, quorumRequi
       )}
       {isSucceeded && (
         <div style={{ marginTop: 8 }} onClick={(e) => e.stopPropagation()}>
-          <button className="btn-blue" onClick={handleExecute} disabled={!address || isWriting}>Execute Proposal</button>
+          <button className="btn-blue" onClick={handleExecute} disabled={!address || busy || isOnWrongChain}>Execute Proposal</button>
         </div>
       )}
 
@@ -218,7 +237,7 @@ function ProposalCard({ proposal, address, isWriting, writeContract, quorumRequi
   );
 }
 
-function CreateProposalForm({ writeContract, isWriting, address, isTop }) {
+function CreateProposalForm({ writeContract, busy, isOnWrongChain, address, isTop }) {
   const [amount, setAmount] = useState('');
   const [target, setTarget] = useState('');
   const [description, setDescription] = useState('');
@@ -281,7 +300,10 @@ function CreateProposalForm({ writeContract, isWriting, address, isTop }) {
         />
       </div>
 
-      <button onClick={handleCreate} disabled={!isTop || isWriting || !description || !amount || !target}>
+      <button
+        onClick={handleCreate}
+        disabled={!isTop || busy || isOnWrongChain || !description || !amount || !target}
+      >
         Submit
       </button>
     </div>

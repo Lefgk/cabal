@@ -1,6 +1,6 @@
 import { useState } from 'react';
-import { useAccount, useWriteContract } from 'wagmi';
-import { useReadContract, useReadContracts } from '../hooks/usePls.js';
+import { useAccount } from 'wagmi';
+import { useReadContract, useReadContracts, useSafeWriteContract } from '../hooks/usePls.js';
 import { formatEther, parseEther, isAddress } from 'viem';
 import { ADDRESSES } from '../config/contracts.js';
 import { TOKEN_TAX_ABI, STAKING_VAULT_ABI, TREASURY_DAO_ABI, ERC20_ABI } from '../config/abis.js';
@@ -51,7 +51,12 @@ export default function TokenInfo() {
   const tokenContract = { address: tokenAddress, abi: TOKEN_TAX_ABI };
 
   const { address: account } = useAccount();
-  const { writeContract, isPending: isTransferring } = useWriteContract();
+  const {
+    writeContract,
+    isPending: isTransferring,
+    isMining,
+    isOnWrongChain,
+  } = useSafeWriteContract();
   const [transferTo, setTransferTo] = useState('');
   const [transferAmount, setTransferAmount] = useState('');
 
@@ -73,6 +78,8 @@ export default function TokenInfo() {
   const canTransfer =
     !!account &&
     !isTransferring &&
+    !isMining &&
+    !isOnWrongChain &&
     validTo &&
     parsedAmount !== null &&
     parsedAmount > 0n;
@@ -258,7 +265,7 @@ export default function TokenInfo() {
           disabled={!account}
         />
         <button onClick={handleTransfer} disabled={!canTransfer}>
-          {isTransferring ? 'Sending…' : 'Transfer'}
+          {isTransferring ? 'Sending…' : isMining ? 'Confirming…' : 'Transfer'}
         </button>
       </div>
       {transferTo && !validTo && (
@@ -266,6 +273,14 @@ export default function TokenInfo() {
       )}
       {!account && (
         <p className="help-text">Connect wallet to transfer.</p>
+      )}
+      {account && isOnWrongChain && (
+        <p className="help-text" style={{ color: 'var(--danger, #c33)' }}>
+          Switch your wallet to PulseChain (369) to transfer.
+        </p>
+      )}
+      {isMining && (
+        <p className="help-text">Waiting for confirmation…</p>
       )}
 
       <h3 style={{ marginTop: 20, marginBottom: 4 }}>Owners</h3>
