@@ -282,14 +282,26 @@ export default function Staking() {
           <span className="stat-label">Staked {address && poolShare !== null ? `(${poolShare.toFixed(2)}%)` : ''}</span>
           <span className="stat-value">{address ? fmt(userStaked) : '—'} <TokenIcon symbol={stkSymbol} />{stkSymbol}</span>
         </div>
-        <div className="stat-box">
-          <span className="stat-label">Earned</span>
+        <div
+          className="stat-box"
+          title="Your claimable rewards right now. Click 'Claim Rewards' below to withdraw this amount."
+        >
+          <span className="stat-label">Claimable</span>
           <span
             className="stat-value highlight-green"
-            style={{ fontSize: 11, wordBreak: 'break-all' }}
+            style={{ fontSize: 14 }}
           >
-            {address ? fmtRwdExact(earnedRaw, 18) : '—'} <TokenIcon symbol={rwdSymbol} />{rwdSymbol}
+            {address ? fmtRwd(earnedRaw, 8, true) : '—'} <TokenIcon symbol={rwdSymbol} />{rwdSymbol}
           </span>
+          {address && earnedRaw !== undefined && earnedRaw > 0n && (
+            <span
+              className="stat-label"
+              style={{ fontSize: 10, marginTop: 2, opacity: 0.7, wordBreak: 'break-all' }}
+              title="Full wei precision"
+            >
+              {fmtRwdExact(earnedRaw, 18)}
+            </span>
+          )}
         </div>
         <div className="stat-box">
           <span className="stat-label">Wallet</span>
