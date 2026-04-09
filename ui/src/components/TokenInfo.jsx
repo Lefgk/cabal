@@ -81,41 +81,35 @@ export default function TokenInfo() {
 
   return (
     <div className="card">
-      <h2>Token Info</h2>
-      <p className="help-text">
-        On-chain details about the token, its tax structure, and lifetime statistics. All data is read directly from the smart contracts on PulseChain.
-      </p>
-
-      {/* Token Details */}
-      <h3>Token Details</h3>
+      <h2>{tokenName || 'Token'} ({sym})</h2>
       <div className="stats-grid">
         <div className="stat-box">
-          <span className="stat-label">Name</span>
-          <span className="stat-value">{tokenName || '...'}</span>
-        </div>
-        <div className="stat-box">
-          <span className="stat-label">Symbol</span>
-          <span className="stat-value">{sym}</span>
-        </div>
-        <div className="stat-box">
           <span className="stat-label">Total Supply</span>
-          <span className="stat-value">{formatNumber(totalSupply)} {sym}</span>
+          <span className="stat-value">{formatNumber(totalSupply)}</span>
         </div>
         <div className="stat-box">
-          <span className="stat-label">Trading Enabled</span>
+          <span className="stat-label">Trading</span>
           <span className="stat-value">
             {tradingEnabled === undefined
-              ? '...'
+              ? '…'
               : tradingEnabled
-                ? <span className="badge badge-active">Yes</span>
-                : <span className="badge badge-defeated">No</span>}
+                ? <span className="badge badge-active">Enabled</span>
+                : <span className="badge badge-defeated">Disabled</span>}
+          </span>
+        </div>
+        <div className="stat-box">
+          <span className="stat-label">Vault</span>
+          <span className="stat-value">
+            {vaultPaused === undefined
+              ? '…'
+              : vaultPaused
+                ? <span className="badge badge-defeated">Paused</span>
+                : <span className="badge badge-active">Active</span>}
           </span>
         </div>
       </div>
 
-      {/* Tax Structure */}
       <h3 style={{ marginTop: 20, marginBottom: 4 }}>Tax Structure (5% total)</h3>
-      <p className="help-text" style={{ marginBottom: 10 }}>Every buy and sell on PulseX is taxed 5% total, split across these categories. Yield goes to stakers as eHEX rewards, Dev/Treasury fills the DAO treasury, Auto LP adds liquidity, External Burn buys and burns ZKP, and Burn destroys tokens permanently.</p>
       <div className="address-grid">
         {taxResults && taxResults.length > 0 ? (
           taxResults.map((res, i) => {
@@ -161,65 +155,45 @@ export default function TokenInfo() {
         )}
       </div>
 
-      {/* Lifetime Stats */}
-      <h3 style={{ marginTop: 20, marginBottom: 4 }}>Lifetime Stats</h3>
-      <p className="help-text" style={{ marginBottom: 10 }}>Cumulative totals since token launch. These numbers represent the total amount of tokens processed by each tax type.</p>
+      <h3 style={{ marginTop: 20, marginBottom: 4 }}>Lifetime Totals</h3>
       <div className="stats-grid">
         <div className="stat-box">
-          <span className="stat-label">Total Burned</span>
-          <span className="stat-value highlight-green">{formatNumber(totalBurned)} {sym}</span>
+          <span className="stat-label">Burned</span>
+          <span className="stat-value highlight-green">{formatNumber(totalBurned)}</span>
         </div>
         <div className="stat-box">
-          <span className="stat-label">Total Yield Distributed</span>
-          <span className="stat-value highlight-green">{formatNumber(totalYield)} {sym}</span>
+          <span className="stat-label">Yield</span>
+          <span className="stat-value highlight-green">{formatNumber(totalYield)}</span>
         </div>
         <div className="stat-box">
-          <span className="stat-label">Total Liquified</span>
-          <span className="stat-value highlight-green">{formatNumber(totalLiquify)} {sym}</span>
+          <span className="stat-label">Liquified</span>
+          <span className="stat-value highlight-green">{formatNumber(totalLiquify)}</span>
         </div>
         <div className="stat-box">
-          <span className="stat-label">Total Dev / Support</span>
-          <span className="stat-value highlight-green">{formatNumber(totalSupport)} {sym}</span>
+          <span className="stat-label">Dev</span>
+          <span className="stat-value highlight-green">{formatNumber(totalSupport)}</span>
         </div>
       </div>
 
-      {/* Contract Ownership */}
-      <h3 style={{ marginTop: 20, marginBottom: 4 }}>Contract Ownership</h3>
-      <p className="help-text" style={{ marginBottom: 10 }}>The owner can adjust parameters like voting period, quorum, and pause the vault in emergencies. Ownership can be transferred or renounced.</p>
+      <h3 style={{ marginTop: 20, marginBottom: 4 }}>Owners</h3>
       <div className="address-grid">
         <div className="address-row">
-          <span className="stat-label">Token Owner</span>
+          <span className="stat-label">Token</span>
           {tokenOwner ? (
-            <a className="address-link" href={`${OTTERSCAN}${tokenOwner}`} target="_blank" rel="noopener noreferrer">
-              {tokenOwner}
-            </a>
-          ) : <span className="stat-value">...</span>}
+            <a className="address-link" href={`${OTTERSCAN}${tokenOwner}`} target="_blank" rel="noopener noreferrer">{tokenOwner}</a>
+          ) : <span className="stat-value">…</span>}
         </div>
         <div className="address-row">
-          <span className="stat-label">Vault Owner</span>
+          <span className="stat-label">Vault</span>
           {vaultOwner ? (
-            <a className="address-link" href={`${OTTERSCAN}${vaultOwner}`} target="_blank" rel="noopener noreferrer">
-              {vaultOwner}
-            </a>
-          ) : <span className="stat-value">...</span>}
+            <a className="address-link" href={`${OTTERSCAN}${vaultOwner}`} target="_blank" rel="noopener noreferrer">{vaultOwner}</a>
+          ) : <span className="stat-value">…</span>}
         </div>
         <div className="address-row">
-          <span className="stat-label">DAO Owner</span>
+          <span className="stat-label">DAO</span>
           {daoOwner ? (
-            <a className="address-link" href={`${OTTERSCAN}${daoOwner}`} target="_blank" rel="noopener noreferrer">
-              {daoOwner}
-            </a>
-          ) : <span className="stat-value">...</span>}
-        </div>
-        <div className="address-row">
-          <span className="stat-label">Vault Paused</span>
-          <span className="stat-value">
-            {vaultPaused === undefined
-              ? '...'
-              : vaultPaused
-                ? <span className="badge badge-defeated">Paused</span>
-                : <span className="badge badge-active">Active</span>}
-          </span>
+            <a className="address-link" href={`${OTTERSCAN}${daoOwner}`} target="_blank" rel="noopener noreferrer">{daoOwner}</a>
+          ) : <span className="stat-value">…</span>}
         </div>
       </div>
     </div>

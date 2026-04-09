@@ -60,9 +60,9 @@ export default function Proposals() {
 
   return (
     <div className="card">
-      <h2>Proposals</h2>
+      <h2>Proposals ({count})</h2>
       <p className="help-text">
-        Proposals let the community decide how to spend Treasury WPLS. Only top stakers can create proposals. All stakers can vote — your voting power equals your staked balance. Proposals need to meet the quorum threshold and get majority "Yes" votes to pass. Once passed, anyone can execute the proposal on-chain, which sends the WPLS to the target address.
+        Top stakers propose, all stakers vote (weight = stake). Needs quorum + majority Yes to pass.
       </p>
 
       {count === 0 && <p style={{ color: 'var(--text)' }}>No proposals yet.</p>}
@@ -182,12 +182,9 @@ function CreateProposalForm({ writeContract, isWriting }) {
   return (
     <div style={{ marginTop: 24, paddingTop: 20, borderTop: '1px solid var(--border)' }}>
       <h3>Create Proposal</h3>
-      <p className="help-text" style={{ marginBottom: 14 }}>
-        As a top staker, you can create proposals to spend Treasury WPLS. Specify how much WPLS, who receives it, and describe the purpose (buy & burn, marketing, LP, etc). The community votes, and if it passes, the WPLS is sent to the target address.
-      </p>
 
       <div className="form-group">
-        <label>Amount (WPLS) — How much WPLS to spend from the Treasury</label>
+        <label>Amount</label>
         <input
           type="text"
           placeholder="0.0"
@@ -198,10 +195,10 @@ function CreateProposalForm({ writeContract, isWriting }) {
       </div>
 
       <div className="form-group">
-        <label>Target Address — The wallet that will receive the WPLS</label>
+        <label>Target</label>
         <input
           type="text"
-          placeholder="0x..."
+          placeholder="0x…"
           value={target}
           onChange={(e) => setTarget(e.target.value)}
           style={{ width: '100%', fontFamily: 'var(--mono)', fontSize: 13 }}
@@ -209,9 +206,9 @@ function CreateProposalForm({ writeContract, isWriting }) {
       </div>
 
       <div className="form-group">
-        <label>Description — Explain the purpose of this proposal</label>
+        <label>Description</label>
         <textarea
-          placeholder="e.g. Buy and burn 500 WPLS worth of tokens, Marketing budget for Q2, Add liquidity on PulseX..."
+          placeholder="Purpose of this proposal…"
           value={description}
           onChange={(e) => setDescription(e.target.value)}
           rows={3}
@@ -220,7 +217,7 @@ function CreateProposalForm({ writeContract, isWriting }) {
       </div>
 
       <button onClick={handleCreate} disabled={isWriting || !description || !amount || !target}>
-        Submit Proposal
+        Submit
       </button>
     </div>
   );

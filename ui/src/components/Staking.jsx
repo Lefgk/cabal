@@ -150,80 +150,55 @@ export default function Staking() {
       </div>
 
       <p className="help-text">
-        Stake your {stkSymbol} tokens to earn {rwdSymbol} rewards. Rewards are distributed linearly over a {durationLabel} period using a Synthetix-style drip — the longer you stake, the more you earn. The top {'{'}100{'}'} stakers by amount also gain the ability to create DAO proposals. You can withdraw or claim rewards at any time with no lock-up.
+        Stake {stkSymbol} to earn {rwdSymbol}. Rewards drip linearly over {durationLabel}. Top 100 stakers can create DAO proposals. No lock-up — withdraw anytime.
       </p>
 
-      {/* APR highlight */}
       {apr !== null && (
         <div className="apr-banner">
           <span className="apr-label">Projected APR</span>
           <span className="apr-value">{apr.toLocaleString(undefined, { maximumFractionDigits: 2 })}%</span>
-          <span className="apr-note">Based on current {durationLabel} reward period, annualized. Actual returns depend on total staked and future reward deposits.</span>
         </div>
       )}
 
-      {!isActive && (
-        <div className="apr-banner" style={{ borderColor: 'rgba(239,68,68,0.3)', background: 'rgba(239,68,68,0.05)' }}>
-          <span className="apr-label">No Active Reward Period</span>
-          <span style={{ fontSize: 14, color: 'var(--text)' }}>Rewards need to be deposited and notified to start a new 7-day distribution period. You can still stake, but no rewards are currently being distributed.</span>
-        </div>
-      )}
-
-      {/* Global stats */}
       <div className="stats-grid">
         <div className="stat-box">
           <span className="stat-label">Total Staked</span>
           <span className="stat-value">{fmt(totalStaked)} {stkSymbol}</span>
         </div>
         <div className="stat-box">
-          <span className="stat-label">Total Stakers</span>
+          <span className="stat-label">Stakers</span>
           <span className="stat-value">{totalStakers !== undefined ? Number(totalStakers).toLocaleString() : '...'}</span>
         </div>
         <div className="stat-box">
-          <span className="stat-label">Rewards This Period</span>
+          <span className="stat-label">This Period</span>
           <span className="stat-value">{fmt(getRewardForDuration)} {rwdSymbol}</span>
         </div>
         <div className="stat-box">
-          <span className="stat-label">Reward Duration</span>
-          <span className="stat-value">{durationLabel}</span>
-        </div>
-        <div className="stat-box">
-          <span className="stat-label">Period Ends</span>
-          <span className="stat-value">{isActive ? formatCountdown(timeLeft) : 'No active period'}</span>
-        </div>
-        <div className="stat-box">
-          <span className="stat-label">Reward Rate</span>
-          <span className="stat-value">{fmt(rewardRate)} {rwdSymbol}/sec</span>
+          <span className="stat-label">Ends In</span>
+          <span className="stat-value">{isActive ? formatCountdown(timeLeft) : '—'}</span>
         </div>
       </div>
 
       {/* User stats */}
       {address && (
         <>
-          <h3 style={{ marginTop: 20, marginBottom: 4 }}>Your Position</h3>
-          <p className="help-text" style={{ marginBottom: 12 }}>Your staked tokens and accumulated rewards. Pool share shows your percentage of the total staked supply.</p>
+          <h3 style={{ marginTop: 20, marginBottom: 8 }}>Your Position</h3>
           <div className="stats-grid">
             <div className="stat-box">
-              <span className="stat-label">Your Stake</span>
+              <span className="stat-label">Staked ({poolShare !== null ? `${poolShare.toFixed(2)}%` : '…'})</span>
               <span className="stat-value">{fmt(userStaked)} {stkSymbol}</span>
             </div>
             <div className="stat-box">
-              <span className="stat-label">Pool Share</span>
-              <span className="stat-value">{poolShare !== null ? `${poolShare.toFixed(4)}%` : '...'}</span>
-            </div>
-            <div className="stat-box">
-              <span className="stat-label">Earned Rewards</span>
+              <span className="stat-label">Earned</span>
               <span className="stat-value highlight-green">{fmt(earnedRaw)} {rwdSymbol}</span>
             </div>
             <div className="stat-box">
-              <span className="stat-label">Wallet Balance</span>
+              <span className="stat-label">Wallet</span>
               <span className="stat-value">{fmt(tokenBalance)} {stkSymbol}</span>
             </div>
           </div>
 
-          {/* Stake */}
-          <p className="help-text" style={{ marginTop: 16, marginBottom: 4 }}>First approve the vault to spend your tokens, then enter an amount and stake. No lock-up — withdraw anytime.</p>
-          <div className="input-group">
+          <div className="input-group" style={{ marginTop: 16 }}>
             <input type="text" placeholder="Amount to stake" value={stakeAmount} onChange={(e) => setStakeAmount(e.target.value)} />
             {needsApproval ? (
               <button onClick={handleApprove} disabled={isWriting}>Approve</button>
@@ -238,8 +213,6 @@ export default function Staking() {
             <button onClick={handleWithdraw} disabled={isWriting || !withdrawAmount}>Withdraw</button>
           </div>
 
-          {/* Claim & Exit */}
-          <p className="help-text" style={{ marginTop: 12, marginBottom: 4 }}>Claim collects your earned {rwdSymbol} rewards. Exit withdraws your entire stake and claims rewards in one transaction.</p>
           <div className="input-group">
             <button className="btn-green" onClick={handleClaim} disabled={isWriting}>Claim Rewards</button>
             <button className="btn-red" onClick={handleExit} disabled={isWriting}>Exit (Withdraw All + Claim)</button>
