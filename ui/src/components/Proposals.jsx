@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { useAccount, useReadContract, useReadContracts, useWriteContract } from 'wagmi';
+import { useAccount, useWriteContract } from 'wagmi';
+import { useReadContract, useReadContracts } from '../hooks/usePls.js';
 import { formatEther, parseEther } from 'viem';
 import { ADDRESSES } from '../config/contracts.js';
 import { TREASURY_DAO_ABI, STAKING_VAULT_ABI } from '../config/abis.js';

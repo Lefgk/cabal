@@ -1,6 +1,8 @@
 import { createConfig, http, fallback } from 'wagmi';
 import { injected } from 'wagmi/connectors';
 
+export const PULSECHAIN_ID = 369;
+
 const pulsechain = {
   id: 369,
   name: 'PulseChain',

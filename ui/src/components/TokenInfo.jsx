@@ -1,4 +1,4 @@
-import { useReadContract, useReadContracts } from 'wagmi';
+import { useReadContract, useReadContracts } from '../hooks/usePls.js';
 import { formatEther } from 'viem';
 import { ADDRESSES } from '../config/contracts.js';
 import { TOKEN_TAX_ABI, STAKING_VAULT_ABI, TREASURY_DAO_ABI } from '../config/abis.js';
