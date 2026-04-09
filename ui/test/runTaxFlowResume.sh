@@ -1,13 +1,5 @@
 #!/usr/bin/env bash
-# One-shot end-to-end tax + staking activity against live PulseChain.
-# Stakes from dev + alt wallets, runs a buy/sell through PulseX to fire
-# all 5 taxes, then triggers the vault's PLS→pHEX conversion + drip.
-#
-# Usage (from repo root):
-#   bash ui/test/runTaxFlow.sh
-#
-# Reads pk_618_sai (dev) and pk (alt) from .env. Never prints key material.
-
+# Resume the tax flow from step 3. Dev already staked 10M via the prior run.
 set -euo pipefail
 
 RPC=${RPC:-https://rpc.pulsechain.com}
@@ -20,23 +12,15 @@ PHEX=0x2b591e99afE9f32eAA6214f7B7629768c40Eeb39
 ZKP=0x90F055196778e541018482213Ca50648cEA1a050
 DEAD=0x000000000000000000000000000000000000dEaD
 
-norm_key() {
-  local k="$1"
-  case "$k" in 0x*) printf '%s' "$k";; *) printf '0x%s' "$k";; esac
-}
-
+norm_key() { case "$1" in 0x*) printf '%s' "$1";; *) printf '0x%s' "$1";; esac; }
 KD=$(norm_key "$(grep '^pk_618_sai=' .env | cut -d= -f2- | tr -d '"' | tr -d "'")")
 KA=$(norm_key "$(grep '^pk=' .env | cut -d= -f2- | tr -d '"' | tr -d "'")")
-
 DEV=$(cast wallet address --private-key "$KD")
 ALT=$(cast wallet address --private-key "$KA")
 
 echo "dev: $DEV"
 echo "alt: $ALT"
 
-# cast send polling confirmation sometimes gives up before the tx mines on
-# the public RPC. Bump --timeout and also retry once on failure — checking
-# nonce advance to decide whether the tx actually made it.
 cast_send_with_retry() {
   local KEY="$1"; shift
   local ADDR="$1"; shift
@@ -57,12 +41,7 @@ cast_send_with_retry() {
 send_dev() { cast_send_with_retry "$KD" "$DEV" "$@"; }
 send_alt() { cast_send_with_retry "$KA" "$ALT" "$@"; }
 
-bal()    { cast call --rpc-url "$RPC" "$1" 'balanceOf(address)(uint256)' "$2"; }
-totsup() { cast call --rpc-url "$RPC" "$1" 'totalSupply()(uint256)'; }
-vview()  { cast call --rpc-url "$RPC" "$VAULT" "$1"; }
-
-DL=$(( $(date +%s) + 1200 ))
-MAX=0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+bal() { cast call --rpc-url "$RPC" "$1" 'balanceOf(address)(uint256)' "$2"; }
 
 snap() {
   echo ""
@@ -74,34 +53,38 @@ snap() {
   echo "vault pHEX  : $(bal $PHEX $VAULT)"
   echo "DAO WPLS    : $(bal $WPLS $DAO)"
   echo "ZKP @ dead  : $(bal $ZKP $DEAD)"
-  echo "TSTT supply : $(totsup $TOKEN)"
+  echo "TSTT supply : $(cast call --rpc-url "$RPC" "$TOKEN" 'totalSupply()(uint256)')"
+  echo "dev staked  : $(cast call --rpc-url "$RPC" "$VAULT" 'stakedBalance(address)(uint256)' $DEV)"
+  echo "alt staked  : $(cast call --rpc-url "$RPC" "$VAULT" 'stakedBalance(address)(uint256)' $ALT)"
+  echo "alt TSTT    : $(bal $TOKEN $ALT)"
 }
 
-snap "BEFORE"
+DL=$(( $(date +%s) + 3600 ))
+
+snap "BEFORE (resume)"
+
+# Ensure alt has 20M TSTT to work with. If alt already has >=12M, skip xfer.
+ALT_CUR=$(bal $TOKEN $ALT)
+ALT_DEC=$(cast --to-dec $ALT_CUR 2>/dev/null || echo "$ALT_CUR")
+# Need at least 12M (1.2e25). Hex of 12M*1e18 = 0x9ed194db19b238c0000
+NEED=$(cast --to-wei 12000000 ether)
+if [ "$(cast --to-dec $ALT_CUR 2>/dev/null || echo 0)" -lt "$NEED" ] 2>/dev/null; then
+  echo ""
+  echo "=== 3. dev -> alt 20M TSTT ==="
+  send_dev "$TOKEN" 'transfer(address,uint256)' "$ALT" 20000000000000000000000000
+fi
 
 echo ""
-echo "=== 1. dev approves vault ==="
-send_dev "$TOKEN" 'approve(address,uint256)' "$VAULT" "$MAX"
-
-echo ""
-echo "=== 2. dev stakes 10M TSTT ==="
-send_dev "$VAULT" 'stake(uint256)' 10000000000000000000000000
-
-echo ""
-echo "=== 3. dev -> alt 20M TSTT (tax-exempt as creator) ==="
-send_dev "$TOKEN" 'transfer(address,uint256)' "$ALT" 20000000000000000000000000
-
-echo ""
-echo "=== 4. alt approves vault ==="
-send_alt "$TOKEN" 'approve(address,uint256)' "$VAULT" "$MAX"
+echo "=== 4. alt approves vault (idempotent) ==="
+send_alt "$TOKEN" 'approve(address,uint256)' "$VAULT" 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
 
 echo ""
 echo "=== 5. alt stakes 10M TSTT ==="
 send_alt "$VAULT" 'stake(uint256)' 10000000000000000000000000
 
 echo ""
-echo "=== 6. alt approves router ==="
-send_alt "$TOKEN" 'approve(address,uint256)' "$ROUTER" "$MAX"
+echo "=== 6. alt approves router (idempotent) ==="
+send_alt "$TOKEN" 'approve(address,uint256)' "$ROUTER" 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
 
 echo ""
 echo "=== 7. alt BUY: 100 PLS -> TSTT via PulseX ==="
@@ -111,25 +94,13 @@ send_alt "$ROUTER" \
   --value 100000000000000000000
 
 echo ""
-echo "=== 8. alt SELL: 2M TSTT -> PLS via PulseX ==="
+echo "=== 8. alt SELL: 1M TSTT -> PLS via PulseX ==="
 send_alt "$ROUTER" \
   'swapExactTokensForETHSupportingFeeOnTransferTokens(uint256,uint256,address[],address,uint256)' \
-  2000000000000000000000000 0 "[$TOKEN,$WPLS]" "$ALT" "$DL"
+  1000000000000000000000000 0 "[$TOKEN,$WPLS]" "$ALT" "$DL"
 
 echo ""
-echo "=== 9. dev calls vault.getReward() — normal user action; autoProcess"
-echo "       modifier swaps accumulated PLS -> pHEX + starts 7d drip ==="
+echo "=== 9. dev calls vault.getReward() (autoProcess swaps PLS->pHEX) ==="
 send_dev "$VAULT" 'getReward()'
 
 snap "AFTER"
-
-echo ""
-echo "=== Summary ==="
-DEV_STAKED=$(cast call --rpc-url "$RPC" "$VAULT" 'stakedBalance(address)(uint256)' "$DEV")
-ALT_STAKED=$(cast call --rpc-url "$RPC" "$VAULT" 'stakedBalance(address)(uint256)' "$ALT")
-DEV_EARNED=$(cast call --rpc-url "$RPC" "$VAULT" 'earned(address)(uint256)' "$DEV")
-ALT_EARNED=$(cast call --rpc-url "$RPC" "$VAULT" 'earned(address)(uint256)' "$ALT")
-echo "dev staked : $DEV_STAKED"
-echo "alt staked : $ALT_STAKED"
-echo "dev earned : $DEV_EARNED (pHEX, 8d)"
-echo "alt earned : $ALT_EARNED (pHEX, 8d)"
