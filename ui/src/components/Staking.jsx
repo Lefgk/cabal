@@ -357,14 +357,14 @@ export default function Staking() {
         </div>
         <div
           className="stat-box"
-          title="Your claimable rewards right now, full 18-decimal precision. Click 'Claim Rewards' below to withdraw this amount."
+          title="Your claimable rewards right now, at pHEX's native 8-decimal precision. Click 'Claim Rewards' below to withdraw this amount."
         >
           <span className="stat-label">Claimable</span>
           <span
             className="stat-value highlight-green"
-            style={{ fontSize: 11, wordBreak: 'break-all' }}
+            style={{ fontSize: 13, wordBreak: 'break-all' }}
           >
-            {address ? fmtRwdExact(earnedRaw, 18) : '—'} <TokenIcon symbol={rwdSymbol} />{rwdSymbol}
+            {address ? fmtRwdExact(earnedRaw, 8) : '—'} <TokenIcon symbol={rwdSymbol} />{rwdSymbol}
           </span>
         </div>
         <div className="stat-box">
