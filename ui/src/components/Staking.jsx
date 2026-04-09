@@ -3,6 +3,7 @@ import { useAccount, useReadContract, useWriteContract } from 'wagmi';
 import { formatEther, parseEther, maxUint256 } from 'viem';
 import { ADDRESSES } from '../config/contracts.js';
 import { STAKING_VAULT_ABI, ERC20_ABI } from '../config/abis.js';
+import TokenIcon from './TokenIcon.jsx';
 
 const vaultAddr = ADDRESSES.stakingVault;
 const tokenAddr = ADDRESSES.stakeToken;
@@ -163,7 +164,7 @@ export default function Staking() {
       <div className="stats-grid">
         <div className="stat-box">
           <span className="stat-label">Total Staked</span>
-          <span className="stat-value">{fmt(totalStaked)} {stkSymbol}</span>
+          <span className="stat-value">{fmt(totalStaked)} <TokenIcon symbol={stkSymbol} />{stkSymbol}</span>
         </div>
         <div className="stat-box">
           <span className="stat-label">Stakers</span>
@@ -171,7 +172,7 @@ export default function Staking() {
         </div>
         <div className="stat-box">
           <span className="stat-label">This Period</span>
-          <span className="stat-value">{fmt(getRewardForDuration)} {rwdSymbol}</span>
+          <span className="stat-value">{fmt(getRewardForDuration)} <TokenIcon symbol={rwdSymbol} />{rwdSymbol}</span>
         </div>
         <div className="stat-box">
           <span className="stat-label">Ends In</span>
@@ -184,15 +185,15 @@ export default function Staking() {
       <div className="stats-grid">
         <div className="stat-box">
           <span className="stat-label">Staked {address && poolShare !== null ? `(${poolShare.toFixed(2)}%)` : ''}</span>
-          <span className="stat-value">{address ? fmt(userStaked) : '—'} {stkSymbol}</span>
+          <span className="stat-value">{address ? fmt(userStaked) : '—'} <TokenIcon symbol={stkSymbol} />{stkSymbol}</span>
         </div>
         <div className="stat-box">
           <span className="stat-label">Earned</span>
-          <span className="stat-value highlight-green">{address ? fmt(earnedRaw) : '—'} {rwdSymbol}</span>
+          <span className="stat-value highlight-green">{address ? fmt(earnedRaw) : '—'} <TokenIcon symbol={rwdSymbol} />{rwdSymbol}</span>
         </div>
         <div className="stat-box">
           <span className="stat-label">Wallet</span>
-          <span className="stat-value">{address ? fmt(tokenBalance) : '—'} {stkSymbol}</span>
+          <span className="stat-value">{address ? fmt(tokenBalance) : '—'} <TokenIcon symbol={stkSymbol} />{stkSymbol}</span>
         </div>
       </div>
 

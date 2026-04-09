@@ -2,6 +2,7 @@ import { useReadContract, useReadContracts } from 'wagmi';
 import { formatEther } from 'viem';
 import { ADDRESSES } from '../config/contracts.js';
 import { TOKEN_TAX_ABI, STAKING_VAULT_ABI, TREASURY_DAO_ABI } from '../config/abis.js';
+import TokenIcon from './TokenIcon.jsx';
 
 const TAX_TYPE_LABELS = {
   0: 'Burn',
@@ -81,7 +82,7 @@ export default function TokenInfo() {
 
   return (
     <div className="card">
-      <h2>{tokenName || 'Token'} ({sym})</h2>
+      <h2><TokenIcon symbol={sym} size={24} />{tokenName || 'Token'} ({sym})</h2>
       <div className="stats-grid">
         <div className="stat-box">
           <span className="stat-label">Total Supply</span>

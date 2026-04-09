@@ -2,6 +2,7 @@ import { useReadContract } from 'wagmi';
 import { formatEther } from 'viem';
 import { ADDRESSES } from '../config/contracts.js';
 import { TREASURY_DAO_ABI, STAKING_VAULT_ABI } from '../config/abis.js';
+import TokenIcon from './TokenIcon.jsx';
 
 const daoAddr = ADDRESSES.treasuryDAO;
 const vaultAddr = ADDRESSES.stakingVault;
@@ -50,11 +51,11 @@ export default function Treasury() {
       <div className="stats-grid">
         <div className="stat-box">
           <span className="stat-label">Available</span>
-          <span className="stat-value highlight-green">{fmt(availableBalance)}</span>
+          <span className="stat-value highlight-green"><TokenIcon symbol="WPLS" />{fmt(availableBalance)}</span>
         </div>
         <div className="stat-box">
           <span className="stat-label">Locked</span>
-          <span className="stat-value">{fmt(lockedAmount)}</span>
+          <span className="stat-value"><TokenIcon symbol="WPLS" />{fmt(lockedAmount)}</span>
         </div>
         <div className="stat-box">
           <span className="stat-label">Voting Period</span>
