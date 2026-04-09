@@ -1,7 +1,9 @@
+import { useState } from 'react';
+import { useAccount, useWriteContract } from 'wagmi';
 import { useReadContract, useReadContracts } from '../hooks/usePls.js';
-import { formatEther } from 'viem';
+import { formatEther, parseEther, isAddress } from 'viem';
 import { ADDRESSES } from '../config/contracts.js';
-import { TOKEN_TAX_ABI, STAKING_VAULT_ABI, TREASURY_DAO_ABI } from '../config/abis.js';
+import { TOKEN_TAX_ABI, STAKING_VAULT_ABI, TREASURY_DAO_ABI, ERC20_ABI } from '../config/abis.js';
 import TokenIcon from './TokenIcon.jsx';
 
 const TAX_TYPE_LABELS = {
@@ -47,6 +49,44 @@ function formatNumber(value) {
 export default function TokenInfo() {
   const tokenAddress = ADDRESSES.stakeToken;
   const tokenContract = { address: tokenAddress, abi: TOKEN_TAX_ABI };
+
+  const { address: account } = useAccount();
+  const { writeContract, isPending: isTransferring } = useWriteContract();
+  const [transferTo, setTransferTo] = useState('');
+  const [transferAmount, setTransferAmount] = useState('');
+
+  const { data: walletBalance } = useReadContract({
+    address: tokenAddress,
+    abi: ERC20_ABI,
+    functionName: 'balanceOf',
+    args: [account],
+    query: { enabled: !!account },
+  });
+
+  const validTo = transferTo && isAddress(transferTo);
+  let parsedAmount = null;
+  try {
+    if (transferAmount) parsedAmount = parseEther(transferAmount);
+  } catch {
+    parsedAmount = null;
+  }
+  const canTransfer =
+    !!account &&
+    !isTransferring &&
+    validTo &&
+    parsedAmount !== null &&
+    parsedAmount > 0n;
+
+  const handleTransfer = () => {
+    if (!canTransfer) return;
+    writeContract({
+      address: tokenAddress,
+      abi: ERC20_ABI,
+      functionName: 'transfer',
+      args: [transferTo, parsedAmount],
+    });
+    setTransferAmount('');
+  };
 
   // Read basic token details
   const { data: tokenName } = useReadContract({ ...tokenContract, functionName: 'name' });
@@ -190,6 +230,43 @@ export default function TokenInfo() {
           <span className="stat-value highlight-green">{formatNumber(totalSupport)}</span>
         </div>
       </div>
+
+      <h3 style={{ marginTop: 20, marginBottom: 4 }}>Transfer</h3>
+      <p className="help-text" style={{ marginTop: 0 }}>
+        Send {sym} to any address. Note: 5% tax applies on transfer.
+        {account && (
+          <>
+            {' '}Wallet: {walletBalance !== undefined ? formatNumber(walletBalance) : '…'} {sym}
+          </>
+        )}
+      </p>
+      <div className="input-group">
+        <input
+          type="text"
+          placeholder="Recipient address (0x…)"
+          value={transferTo}
+          onChange={(e) => setTransferTo(e.target.value)}
+          disabled={!account}
+        />
+      </div>
+      <div className="input-group">
+        <input
+          type="text"
+          placeholder={`Amount of ${sym}`}
+          value={transferAmount}
+          onChange={(e) => setTransferAmount(e.target.value)}
+          disabled={!account}
+        />
+        <button onClick={handleTransfer} disabled={!canTransfer}>
+          {isTransferring ? 'Sending…' : 'Transfer'}
+        </button>
+      </div>
+      {transferTo && !validTo && (
+        <p className="help-text" style={{ color: 'var(--danger, #c33)' }}>Invalid address</p>
+      )}
+      {!account && (
+        <p className="help-text">Connect wallet to transfer.</p>
+      )}
 
       <h3 style={{ marginTop: 20, marginBottom: 4 }}>Owners</h3>
       <div className="address-grid">
