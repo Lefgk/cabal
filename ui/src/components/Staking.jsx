@@ -163,6 +163,13 @@ export default function Staking() {
   const handleExit = () => {
     writeContract({ address: vaultAddr, abi: STAKING_VAULT_ABI, functionName: 'exit' });
   };
+  // Any wallet can fire processRewards() — it's the public keeper hook
+  // that folds pending PLS into the drip. Unlike stake/withdraw/getReward,
+  // it doesn't require the caller to be a staker, so non-holders can
+  // also poke the vault to keep rewards flowing.
+  const handleProcess = () => {
+    writeContract({ address: vaultAddr, abi: STAKING_VAULT_ABI, functionName: 'processRewards' });
+  };
 
   // Stake-token amounts (always 18d)
   const fmt = (val) => {
@@ -240,6 +247,17 @@ export default function Staking() {
         <span className="apr-note">
           Fires automatically on the next stake / withdraw / claim. Needs ≥ 604,800 wei pHEX after swap to restart the drip.
         </span>
+        <div style={{ marginTop: 10 }}>
+          <button
+            className="btn-blue"
+            onClick={handleProcess}
+            disabled={!address || isWriting || !vaultPlsBal || vaultPlsBal.value === 0n}
+            title="Call processRewards() on the vault — public keeper hook that swaps pending PLS to pHEX and extends the drip. Anyone can call this, no stake required."
+            style={{ fontSize: 12, padding: '6px 12px' }}
+          >
+            Process pending → pHEX
+          </button>
+        </div>
       </div>
 
       <div className="stats-grid">
