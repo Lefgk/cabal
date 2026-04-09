@@ -5,6 +5,10 @@ const LOGOS = {
   PLS: '/tokens/PLS.png',
   TSTT: '/tokens/PLSX.png',
   PLSX: '/tokens/PLSX.png',
+  // pHEX = native PulseChain HEX. On-chain symbol is literally "HEX",
+  // but we display it as "pHEX" everywhere to disambiguate from eHEX.
+  PHEX: '/tokens/pHEX.png',
+  HEX:  '/tokens/pHEX.png',
 };
 
 export default function TokenIcon({ symbol, size = 16 }) {

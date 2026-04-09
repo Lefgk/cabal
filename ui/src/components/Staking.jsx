@@ -1,13 +1,21 @@
 import { useState } from 'react';
 import { useAccount, useReadContract, useWriteContract } from 'wagmi';
-import { formatEther, parseEther, maxUint256 } from 'viem';
+import { formatEther, formatUnits, parseEther, maxUint256 } from 'viem';
 import { ADDRESSES } from '../config/contracts.js';
 import { STAKING_VAULT_ABI, ERC20_ABI } from '../config/abis.js';
 import TokenIcon from './TokenIcon.jsx';
 
 const vaultAddr = ADDRESSES.stakingVault;
 const tokenAddr = ADDRESSES.stakeToken;
-const SECONDS_PER_YEAR = 365.25 * 24 * 3600;
+
+// Display override: native PulseChain HEX reports its on-chain symbol as
+// "HEX", but we present it as "pHEX" throughout the UI to make it unambiguous
+// vs eHEX and to match the client spec.
+function displaySymbol(raw) {
+  if (!raw) return raw;
+  if (raw === 'HEX') return 'pHEX';
+  return raw;
+}
 
 function formatCountdown(seconds) {
   if (seconds <= 0) return 'Ended';
@@ -56,6 +64,10 @@ export default function Staking() {
     address: rewardsTokenAddr, abi: ERC20_ABI, functionName: 'symbol',
     query: { enabled: !!rewardsTokenAddr },
   });
+  const { data: rewardsTokenDecimals } = useReadContract({
+    address: rewardsTokenAddr, abi: ERC20_ABI, functionName: 'decimals',
+    query: { enabled: !!rewardsTokenAddr },
+  });
   const { data: stakeTokenSymbol } = useReadContract({
     address: tokenAddr, abi: ERC20_ABI, functionName: 'symbol',
   });
@@ -86,18 +98,11 @@ export default function Staking() {
   const now = Math.floor(Date.now() / 1000);
   const timeLeft = periodFinish ? Number(periodFinish) - now : 0;
   const isActive = timeLeft > 0;
-  const rwdSymbol = rewardsTokenSymbol || 'RWD';
+  const rwdSymbol = displaySymbol(rewardsTokenSymbol) || 'RWD';
   const stkSymbol = stakeTokenSymbol || 'TOKEN';
-
-  // APR: (rewardRate * SECONDS_PER_YEAR / totalStaked) * 100
-  // This is a simple projection — assumes 1:1 value between stake and reward token
-  const apr = (() => {
-    if (!rewardRate || !totalStaked || totalStaked === 0n) return null;
-    const ratePerYear = Number(formatEther(rewardRate)) * SECONDS_PER_YEAR;
-    const staked = Number(formatEther(totalStaked));
-    if (staked === 0) return null;
-    return (ratePerYear / staked) * 100;
-  })();
+  // Reward token decimals (pHEX = 8, NOT 18). We MUST NOT use formatEther
+  // for reward amounts — it would under-report by 10^10.
+  const rwdDec = rewardsTokenDecimals !== undefined ? Number(rewardsTokenDecimals) : 18;
 
   // User pool share %
   const poolShare = (() => {
@@ -133,9 +138,15 @@ export default function Staking() {
     writeContract({ address: vaultAddr, abi: STAKING_VAULT_ABI, functionName: 'exit' });
   };
 
+  // Stake-token amounts (always 18d)
   const fmt = (val) => {
     if (val === undefined || val === null) return '...';
     return Number(formatEther(val)).toLocaleString(undefined, { maximumFractionDigits: 4 });
+  };
+  // Reward-token amounts — uses the on-chain decimals (pHEX = 8)
+  const fmtRwd = (val) => {
+    if (val === undefined || val === null) return '...';
+    return Number(formatUnits(val, rwdDec)).toLocaleString(undefined, { maximumFractionDigits: 4 });
   };
 
   return (
@@ -154,10 +165,12 @@ export default function Staking() {
         Stake {stkSymbol} to earn {rwdSymbol}. Rewards drip linearly over {durationLabel}. Top 100 stakers can create DAO proposals. No lock-up — withdraw anytime.
       </p>
 
-      {apr !== null && (
+      {isActive && getRewardForDuration && (
         <div className="apr-banner">
-          <span className="apr-label">Projected APR</span>
-          <span className="apr-value">{apr.toLocaleString(undefined, { maximumFractionDigits: 2 })}%</span>
+          <span className="apr-label">Current {durationLabel} Emission</span>
+          <span className="apr-value">
+            {fmtRwd(getRewardForDuration)} <TokenIcon symbol={rwdSymbol} />{rwdSymbol}
+          </span>
         </div>
       )}
 
@@ -172,7 +185,7 @@ export default function Staking() {
         </div>
         <div className="stat-box">
           <span className="stat-label">This Period</span>
-          <span className="stat-value">{fmt(getRewardForDuration)} <TokenIcon symbol={rwdSymbol} />{rwdSymbol}</span>
+          <span className="stat-value">{fmtRwd(getRewardForDuration)} <TokenIcon symbol={rwdSymbol} />{rwdSymbol}</span>
         </div>
         <div className="stat-box">
           <span className="stat-label">Ends In</span>
@@ -189,7 +202,7 @@ export default function Staking() {
         </div>
         <div className="stat-box">
           <span className="stat-label">Earned</span>
-          <span className="stat-value highlight-green">{address ? fmt(earnedRaw) : '—'} <TokenIcon symbol={rwdSymbol} />{rwdSymbol}</span>
+          <span className="stat-value highlight-green">{address ? fmtRwd(earnedRaw) : '—'} <TokenIcon symbol={rwdSymbol} />{rwdSymbol}</span>
         </div>
         <div className="stat-box">
           <span className="stat-label">Wallet</span>

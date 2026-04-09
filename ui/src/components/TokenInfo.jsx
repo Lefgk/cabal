@@ -24,6 +24,16 @@ const TAX_MOMENT_LABELS = {
 const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
 const DEAD_ADDRESS = '0x000000000000000000000000000000000000dEaD';
 
+// Map tax-receiver addr → human label describing the downstream behaviour.
+// Keyed by lowercase address so we're robust to checksum variation.
+function taxFlowLabel(receiver) {
+  if (!receiver) return null;
+  const r = receiver.toLowerCase();
+  if (r === ADDRESSES.stakingVault.toLowerCase()) return '→ pHEX (stakers)';
+  if (r === ADDRESSES.treasuryDAO.toLowerCase())  return '→ WPLS (DAO)';
+  return null;
+}
+
 const OTTERSCAN = 'https://otter.pulsechain.com/address/';
 
 const TAX_COUNT = 5; // hardcoded — no taxCount() on-chain
@@ -142,9 +152,14 @@ export default function TokenInfo() {
                       {taxToken}
                     </a>
                   )}
-                  {taxType === 2 && rewardInPls && (
-                    <span className="badge badge-active">Rewards in PLS</span>
-                  )}
+                  {taxType === 2 && rewardInPls && (() => {
+                    const flow = taxFlowLabel(wallet);
+                    return (
+                      <span className="badge badge-active">
+                        {flow ? `PLS ${flow}` : 'Paid in PLS'}
+                      </span>
+                    );
+                  })()}
                 </span>
               </div>
             );

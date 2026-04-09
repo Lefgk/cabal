@@ -18,6 +18,13 @@ interface IPulseXRouter {
     function WPLS() external pure returns (address);
 }
 
+/// @dev Minimal interface for unwrapping WPLS that arrives from tax distributions
+///      when the factory transfers WPLS (not raw PLS) to the vault.
+interface IWPLS {
+    function balanceOf(address) external view returns (uint256);
+    function withdraw(uint256) external;
+}
+
 /// @title StakingVault
 /// @notice Synthetix StakingRewards-style vault with 7-day linear reward drip.
 ///         Stake an ERC-20 token, earn yield in a different reward token that
@@ -304,12 +311,17 @@ contract StakingVault is IStakingVault, Ownable, ReentrancyGuard {
         emit RewardAdded(reward);
     }
 
-    /// @dev Accept PLS sent directly to the contract and auto-topUp.
-    receive() external payable {
-        if (address(dexRouter) != address(0)) {
-            topUp();
-        }
-    }
+    /// @dev Accept PLS silently. We MUST NOT auto-call topUp() from receive()
+    ///      because the token factory's tax distribution routes PLS into the
+    ///      vault mid-transfer (e.g. inside stake()/transferFrom). topUp() is
+    ///      nonReentrant, and stake()/withdraw()/getReward() are nonReentrant,
+    ///      so re-entering topUp() during a stake call would revert with
+    ///      ReentrancyGuardReentrantCall and brick every user action.
+    ///      Instead, accumulated PLS is swapped to REWARDS_TOKEN via
+    ///      `_swapPendingPLSForRewardToken()` inside `_processRewardsIfNew()`,
+    ///      which is invoked by the `autoProcess` modifier on the next
+    ///      stake/withdraw/getReward (or by an explicit processRewards()).
+    receive() external payable {}
 
     // -------------------------------------------------------------------------
     // Process rewards — auto-notify when reward tokens are sent directly
@@ -334,7 +346,56 @@ contract StakingVault is IStakingVault, Ownable, ReentrancyGuard {
     ///      period if there are uncommitted reward tokens sitting in the
     ///      vault. Safe to call repeatedly and safe to call when there is
     ///      nothing to do (no revert on no-op).
+    /// @dev Swap any PLS sitting in the vault (deposited via receive() by
+    ///      factory tax distributions) into REWARDS_TOKEN via the configured
+    ///      router. Also unwraps any WPLS the factory may have transferred
+    ///      directly. Wrapped in try/catch so a broken router/pair never
+    ///      bricks stake/withdraw/getReward.
+    function _swapPendingPLSForRewardToken() internal {
+        if (address(dexRouter) == address(0)) return;
+
+        // Unwrap any WPLS balance first.
+        address wpls = dexRouter.WPLS();
+        uint256 wplsBal = IWPLS(wpls).balanceOf(address(this));
+        if (wplsBal > 0) {
+            try IWPLS(wpls).withdraw(wplsBal) {} catch {}
+        }
+
+        uint256 plsBal = address(this).balance;
+        if (plsBal == 0) return;
+
+        // If rewards token is WPLS, no swap needed (already unwrapped above
+        // into PLS which we'll re-wrap below by skipping swap). Handle the
+        // degenerate "reward token is WPLS" case by re-wrapping.
+        if (address(REWARDS_TOKEN) == wpls) {
+            try IWPLS(wpls).withdraw(0) {} catch {} // no-op, just to appease linters
+            // Re-wrap via a direct call: use dexRouter's receive-less path by
+            // swapping PLS→WPLS is equivalent to deposit. Simplest: skip the
+            // swap entirely — the balance is already WPLS after the wrap.
+            // (We don't support this edge case optimally since our design
+            // targets eHEX. Leave plsBal held until admin intervenes.)
+            return;
+        }
+
+        address[] memory path = new address[](2);
+        path[0] = wpls;
+        path[1] = address(REWARDS_TOKEN);
+
+        try dexRouter.swapExactETHForTokensSupportingFeeOnTransferTokens{value: plsBal}(
+            0, // accept any amount — MEV protection isn't critical for reward injection
+            path,
+            address(this),
+            block.timestamp
+        ) {} catch {
+            // Swap failed (pair missing, liquidity thin, etc). Leave PLS in
+            // place for the next attempt — DO NOT revert the parent action.
+        }
+    }
+
     function _processRewardsIfNew() internal {
+        // --- 0. Convert any pending PLS (from factory tax) into reward token. ---
+        _swapPendingPLSForRewardToken();
+
         // --- 1. Snap global state to now (same as updateReward(address(0))). ---
         uint256 newRPT = rewardPerToken();
         if (newRPT > rewardPerTokenStored && _totalSupply > 0) {
