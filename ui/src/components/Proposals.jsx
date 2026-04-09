@@ -71,7 +71,7 @@ export default function Proposals() {
         <ProposalCard key={Number(p.id)} proposal={p} address={address} isWriting={isWriting} writeContract={writeContract} />
       ))}
 
-      {isTop && <CreateProposalForm writeContract={writeContract} isWriting={isWriting} />}
+      <CreateProposalForm writeContract={writeContract} isWriting={isWriting} address={address} isTop={isTop} />
     </div>
   );
 }
@@ -163,7 +163,7 @@ function ProposalCard({ proposal, address, isWriting, writeContract }) {
   );
 }
 
-function CreateProposalForm({ writeContract, isWriting }) {
+function CreateProposalForm({ writeContract, isWriting, address, isTop }) {
   const [amount, setAmount] = useState('');
   const [target, setTarget] = useState('');
   const [description, setDescription] = useState('');
@@ -179,9 +179,16 @@ function CreateProposalForm({ writeContract, isWriting }) {
     setDescription('');
   };
 
+  const gateMsg = !address
+    ? 'Connect wallet to propose.'
+    : !isTop
+      ? 'Only top-100 stakers can create proposals. Stake more to qualify.'
+      : null;
+
   return (
     <div style={{ marginTop: 24, paddingTop: 20, borderTop: '1px solid var(--border)' }}>
       <h3>Create Proposal</h3>
+      {gateMsg && <p className="help-text" style={{ marginBottom: 12 }}>{gateMsg}</p>}
 
       <div className="form-group">
         <label>Amount</label>
@@ -190,6 +197,7 @@ function CreateProposalForm({ writeContract, isWriting }) {
           placeholder="0.0"
           value={amount}
           onChange={(e) => setAmount(e.target.value)}
+          disabled={!isTop}
           style={{ width: '100%' }}
         />
       </div>
@@ -201,6 +209,7 @@ function CreateProposalForm({ writeContract, isWriting }) {
           placeholder="0x…"
           value={target}
           onChange={(e) => setTarget(e.target.value)}
+          disabled={!isTop}
           style={{ width: '100%', fontFamily: 'var(--mono)', fontSize: 13 }}
         />
       </div>
@@ -211,12 +220,13 @@ function CreateProposalForm({ writeContract, isWriting }) {
           placeholder="Purpose of this proposal…"
           value={description}
           onChange={(e) => setDescription(e.target.value)}
+          disabled={!isTop}
           rows={3}
           style={{ width: '100%', resize: 'vertical' }}
         />
       </div>
 
-      <button onClick={handleCreate} disabled={isWriting || !description || !amount || !target}>
+      <button onClick={handleCreate} disabled={!isTop || isWriting || !description || !amount || !target}>
         Submit
       </button>
     </div>

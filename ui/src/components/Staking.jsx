@@ -179,45 +179,44 @@ export default function Staking() {
         </div>
       </div>
 
-      {/* User stats */}
-      {address && (
-        <>
-          <h3 style={{ marginTop: 20, marginBottom: 8 }}>Your Position</h3>
-          <div className="stats-grid">
-            <div className="stat-box">
-              <span className="stat-label">Staked ({poolShare !== null ? `${poolShare.toFixed(2)}%` : '…'})</span>
-              <span className="stat-value">{fmt(userStaked)} {stkSymbol}</span>
-            </div>
-            <div className="stat-box">
-              <span className="stat-label">Earned</span>
-              <span className="stat-value highlight-green">{fmt(earnedRaw)} {rwdSymbol}</span>
-            </div>
-            <div className="stat-box">
-              <span className="stat-label">Wallet</span>
-              <span className="stat-value">{fmt(tokenBalance)} {stkSymbol}</span>
-            </div>
-          </div>
+      {/* User stats — always shown, empty when disconnected */}
+      <h3 style={{ marginTop: 20, marginBottom: 8 }}>Your Position</h3>
+      <div className="stats-grid">
+        <div className="stat-box">
+          <span className="stat-label">Staked {address && poolShare !== null ? `(${poolShare.toFixed(2)}%)` : ''}</span>
+          <span className="stat-value">{address ? fmt(userStaked) : '—'} {stkSymbol}</span>
+        </div>
+        <div className="stat-box">
+          <span className="stat-label">Earned</span>
+          <span className="stat-value highlight-green">{address ? fmt(earnedRaw) : '—'} {rwdSymbol}</span>
+        </div>
+        <div className="stat-box">
+          <span className="stat-label">Wallet</span>
+          <span className="stat-value">{address ? fmt(tokenBalance) : '—'} {stkSymbol}</span>
+        </div>
+      </div>
 
-          <div className="input-group" style={{ marginTop: 16 }}>
-            <input type="text" placeholder="Amount to stake" value={stakeAmount} onChange={(e) => setStakeAmount(e.target.value)} />
-            {needsApproval ? (
-              <button onClick={handleApprove} disabled={isWriting}>Approve</button>
-            ) : (
-              <button onClick={handleStake} disabled={isWriting || !stakeAmount}>Stake</button>
-            )}
-          </div>
+      <div className="input-group" style={{ marginTop: 16 }}>
+        <input type="text" placeholder="Amount to stake" value={stakeAmount} onChange={(e) => setStakeAmount(e.target.value)} disabled={!address} />
+        {needsApproval ? (
+          <button onClick={handleApprove} disabled={!address || isWriting}>Approve</button>
+        ) : (
+          <button onClick={handleStake} disabled={!address || isWriting || !stakeAmount}>Stake</button>
+        )}
+      </div>
 
-          {/* Withdraw */}
-          <div className="input-group">
-            <input type="text" placeholder="Amount to withdraw" value={withdrawAmount} onChange={(e) => setWithdrawAmount(e.target.value)} />
-            <button onClick={handleWithdraw} disabled={isWriting || !withdrawAmount}>Withdraw</button>
-          </div>
+      <div className="input-group">
+        <input type="text" placeholder="Amount to withdraw" value={withdrawAmount} onChange={(e) => setWithdrawAmount(e.target.value)} disabled={!address} />
+        <button onClick={handleWithdraw} disabled={!address || isWriting || !withdrawAmount}>Withdraw</button>
+      </div>
 
-          <div className="input-group">
-            <button className="btn-green" onClick={handleClaim} disabled={isWriting}>Claim Rewards</button>
-            <button className="btn-red" onClick={handleExit} disabled={isWriting}>Exit (Withdraw All + Claim)</button>
-          </div>
-        </>
+      <div className="input-group">
+        <button className="btn-green" onClick={handleClaim} disabled={!address || isWriting}>Claim Rewards</button>
+        <button className="btn-red" onClick={handleExit} disabled={!address || isWriting}>Exit (Withdraw All + Claim)</button>
+      </div>
+
+      {!address && (
+        <p className="help-text" style={{ marginTop: 8 }}>Connect wallet to stake.</p>
       )}
 
       {/* Top Stakers */}
