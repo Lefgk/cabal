@@ -573,6 +573,353 @@ contract TreasuryDAOTest is Test {
     }
 
     // ---------------------------------------------------------------
+    //  Events
+    // ---------------------------------------------------------------
+
+    function test_propose_emitsEvent() public {
+        uint256 start = block.timestamp;
+        uint256 end = start + dao.votingPeriod();
+        vm.expectEmit(true, true, false, true, address(dao));
+        emit ITreasuryDAO.ProposalCreated(0, alice, 100e18, bob, "spend", start, end);
+        vm.prank(alice);
+        dao.propose(100e18, bob, "spend");
+    }
+
+    function test_castVote_emitsEvent() public {
+        uint256 id = _propose(alice, 100e18, bob, "spend");
+        vm.expectEmit(true, true, false, true, address(dao));
+        emit ITreasuryDAO.VoteCast(id, alice, true, 100e18);
+        vm.prank(alice);
+        dao.castVote(id, true);
+    }
+
+    function test_execute_emitsEvent() public {
+        uint256 id = _proposeAndPass(50e18, bob, "spend");
+        vm.expectEmit(true, false, false, true, address(dao));
+        emit ITreasuryDAO.ProposalExecuted(id, 50e18, bob);
+        dao.executeProposal(id);
+    }
+
+    function test_unlockDefeated_emitsEvents() public {
+        uint256 id = _propose(alice, 300e18, bob, "spend");
+        vm.warp(block.timestamp + 7 days + 1);
+
+        vm.expectEmit(true, false, false, true, address(dao));
+        emit ITreasuryDAO.FundsUnlocked(id, 300e18);
+        vm.expectEmit(true, false, false, true, address(dao));
+        emit ITreasuryDAO.ProposalDefeated(id);
+        dao.unlockDefeated(id);
+    }
+
+    function test_depositWPLS_emitsEvent() public {
+        wplsToken.mint(alice, 50e18);
+        vm.startPrank(alice);
+        wplsToken.approve(address(dao), 50e18);
+        vm.expectEmit(true, false, false, true, address(dao));
+        emit ITreasuryDAO.WPLSDeposited(alice, 50e18);
+        dao.depositWPLS(50e18);
+        vm.stopPrank();
+    }
+
+    function test_receive_emitsEventAndWraps() public {
+        vm.deal(alice, 10 ether);
+        vm.expectEmit(true, false, false, true, address(dao));
+        emit ITreasuryDAO.PLSReceived(alice, 3 ether);
+        vm.prank(alice);
+        (bool ok,) = address(dao).call{value: 3 ether}("");
+        assertTrue(ok);
+    }
+
+    function test_receive_zeroValueNoop() public {
+        uint256 balBefore = wplsToken.balanceOf(address(dao));
+        vm.prank(alice);
+        (bool ok,) = address(dao).call{value: 0}("");
+        assertTrue(ok);
+        assertEq(wplsToken.balanceOf(address(dao)), balBefore);
+    }
+
+    // ---------------------------------------------------------------
+    //  Admin access control (non-owner)
+    // ---------------------------------------------------------------
+
+    function test_setVotingPeriod_revertsNonOwner() public {
+        vm.prank(alice);
+        vm.expectRevert();
+        dao.setVotingPeriod(2 days);
+    }
+
+    function test_setQuorumBps_revertsNonOwner() public {
+        vm.prank(alice);
+        vm.expectRevert();
+        dao.setQuorumBps(2000);
+    }
+
+    function test_setDexRouter_revertsNonOwner() public {
+        vm.prank(alice);
+        vm.expectRevert();
+        dao.setDexRouter(makeAddr("r"));
+    }
+
+    function test_setWpls_revertsNonOwner() public {
+        vm.prank(alice);
+        vm.expectRevert();
+        dao.setWpls(makeAddr("w"));
+    }
+
+    function test_setToken_revertsNonOwner() public {
+        vm.prank(alice);
+        vm.expectRevert();
+        dao.setToken(makeAddr("t"));
+    }
+
+    // ---------------------------------------------------------------
+    //  Admin boundary values
+    // ---------------------------------------------------------------
+
+    function test_setVotingPeriod_minBoundary() public {
+        dao.setVotingPeriod(dao.MIN_VOTING_PERIOD());
+        assertEq(dao.votingPeriod(), 1 days);
+    }
+
+    function test_setVotingPeriod_maxBoundary() public {
+        dao.setVotingPeriod(dao.MAX_VOTING_PERIOD());
+        assertEq(dao.votingPeriod(), 30 days);
+    }
+
+    function test_setQuorumBps_maxBoundary() public {
+        dao.setQuorumBps(dao.MAX_QUORUM_BPS());
+        assertEq(dao.quorumBps(), 5000);
+    }
+
+    // ---------------------------------------------------------------
+    //  Voting weight snapshot & staker set changes
+    // ---------------------------------------------------------------
+
+    /// @dev Voter's weight at vote time is snapshotted and not changed by later un/re-stake.
+    function test_castVote_weightSnapshot_ignoresLaterStakeChanges() public {
+        uint256 id = _propose(alice, 50e18, bob, "spend");
+
+        vm.prank(alice);
+        dao.castVote(id, true);
+
+        // Alice withdraws most of her stake AFTER voting
+        vm.prank(alice);
+        vault.withdraw(90e18);
+
+        ITreasuryDAO.Proposal memory p = dao.proposals(id);
+        assertEq(p.yesVotes, 100e18, "yes tally is snapshot weight");
+
+        ITreasuryDAO.Receipt memory r = dao.getReceipt(id, alice);
+        assertEq(r.weight, 100e18);
+    }
+
+    /// @dev A previously-top-staker who dropped out can still vote as long as weight > 0.
+    function test_castVote_formerTopStakerCanStillVote() public {
+        // Add 5th staker to fill top list; then push carol out by boosting a 6th
+        address dave = makeAddr("dave");
+        address eve = makeAddr("eve");
+        _stakeAs(dave, 70e18);
+        _stakeAs(eve, 65e18);
+
+        uint256 id = _propose(alice, 50e18, bob, "spend");
+
+        // Now bump a sixth staker above carol so carol drops from top set
+        address frank = makeAddr("frank");
+        _stakeAs(frank, 75e18);
+        assertFalse(vault.isTopStaker(carol), "carol should no longer be top staker");
+
+        // Carol still has stake, still has voting power
+        vm.prank(carol);
+        dao.castVote(id, true);
+
+        ITreasuryDAO.Proposal memory p = dao.proposals(id);
+        assertEq(p.yesVotes, 60e18);
+    }
+
+    /// @dev A user who wasn't a top staker at setUp, but became one, can propose.
+    function test_propose_newlyPromotedTopStakerCanPropose() public {
+        address dave = makeAddr("dave");
+        _stakeAs(dave, 120e18); // larger than alice; definitely top
+        assertTrue(vault.isTopStaker(dave));
+
+        vm.prank(dave);
+        uint256 id = dao.propose(50e18, bob, "dave spend");
+        assertEq(id, 0);
+    }
+
+    // ---------------------------------------------------------------
+    //  Quorum boundary precision
+    // ---------------------------------------------------------------
+
+    /// @dev At quorum of 10% of 240e18 = 24e18 votes. Vote exactly at = succeed.
+    function test_quorum_justBelowFails() public {
+        // Use a fresh vault so totalStaked is controllable.
+        StakingVault v = new StakingVault(address(stakeToken), address(rewardToken), owner, TOP_COUNT);
+        v.setDaoAddress(address(dao));
+        dao.setStakingVault(address(v));
+
+        // total = 1000e18; 10% = 100e18
+        address a = makeAddr("a1");
+        address b = makeAddr("b1");
+        _stakeInto(v, a, 99e18);   // just below quorum
+        _stakeInto(v, b, 901e18);  // bring total to 1000e18, b doesn't vote
+
+        vm.prank(a);
+        uint256 id = dao.propose(10e18, bob, "spend");
+
+        vm.prank(a);
+        dao.castVote(id, true);
+
+        vm.warp(block.timestamp + 7 days + 1);
+        assertEq(uint256(dao.state(id)), uint256(ITreasuryDAO.ProposalState.Defeated));
+    }
+
+    function test_quorum_justAbovePasses() public {
+        StakingVault v = new StakingVault(address(stakeToken), address(rewardToken), owner, TOP_COUNT);
+        v.setDaoAddress(address(dao));
+        dao.setStakingVault(address(v));
+
+        address a = makeAddr("a2");
+        address b = makeAddr("b2");
+        _stakeInto(v, a, 100e18); // exactly quorum
+        _stakeInto(v, b, 900e18);
+
+        vm.prank(a);
+        uint256 id = dao.propose(10e18, bob, "spend");
+
+        vm.prank(a);
+        dao.castVote(id, true);
+
+        vm.warp(block.timestamp + 7 days + 1);
+        assertEq(uint256(dao.state(id)), uint256(ITreasuryDAO.ProposalState.Succeeded));
+    }
+
+    // ---------------------------------------------------------------
+    //  State query edge cases
+    // ---------------------------------------------------------------
+
+    function test_state_executedFlagDefeatedBranch() public {
+        // A defeated proposal that was unlocked (p.executed=true) reports Defeated.
+        uint256 id = _propose(alice, 100e18, bob, "spend");
+        vm.warp(block.timestamp + 7 days + 1);
+        dao.unlockDefeated(id);
+        assertEq(uint256(dao.state(id)), uint256(ITreasuryDAO.ProposalState.Defeated));
+    }
+
+    function test_getReceipt_defaultForNonVoter() public {
+        uint256 id = _propose(alice, 50e18, bob, "spend");
+        ITreasuryDAO.Receipt memory r = dao.getReceipt(id, carol);
+        assertFalse(r.hasVoted);
+        assertFalse(r.support);
+        assertEq(r.weight, 0);
+    }
+
+    function test_proposals_revertsInvalidId() public {
+        vm.expectRevert("invalid proposal");
+        dao.proposals(42);
+    }
+
+    // ---------------------------------------------------------------
+    //  Double execute / lifecycle re-entry prevention
+    // ---------------------------------------------------------------
+
+    function test_execute_cannotReExecuteAfterStateSetToExecuted() public {
+        uint256 id = _proposeAndPass(50e18, bob, "spend");
+        dao.executeProposal(id);
+        // state now Executed; second execute should revert with "not succeeded"
+        vm.expectRevert("not succeeded");
+        dao.executeProposal(id);
+    }
+
+    function test_unlockDefeated_cannotBeCalledOnExecuted() public {
+        uint256 id = _proposeAndPass(50e18, bob, "spend");
+        dao.executeProposal(id);
+        vm.expectRevert("not defeated");
+        dao.unlockDefeated(id);
+    }
+
+    function test_executeProposal_cannotExecuteAfterDefeatUnlock() public {
+        uint256 id = _propose(alice, 100e18, bob, "spend");
+        vm.warp(block.timestamp + 7 days + 1);
+        dao.unlockDefeated(id);
+        vm.expectRevert("not succeeded");
+        dao.executeProposal(id);
+    }
+
+    // ---------------------------------------------------------------
+    //  Flows between proposals
+    // ---------------------------------------------------------------
+
+    function test_unlockDefeated_freesBalanceForNewProposal() public {
+        uint256 id1 = _propose(alice, 900e18, bob, "big spend");
+        vm.warp(block.timestamp + 7 days + 1);
+        dao.unlockDefeated(id1);
+
+        // Now the full 1000e18 is usable again.
+        assertEq(dao.availableBalance(), 1000e18);
+
+        vm.prank(bob);
+        uint256 id2 = dao.propose(800e18, carol, "reuse");
+        assertEq(id2, 1);
+        assertEq(dao.lockedAmount(), 800e18);
+    }
+
+    function test_execute_reducesDaoBalance() public {
+        address target = makeAddr("t3");
+        uint256 id = _proposeAndPass(250e18, target, "spend");
+
+        uint256 daoBefore = wplsToken.balanceOf(address(dao));
+        dao.executeProposal(id);
+        assertEq(wplsToken.balanceOf(address(dao)), daoBefore - 250e18);
+        assertEq(wplsToken.balanceOf(target), 250e18);
+    }
+
+    // ---------------------------------------------------------------
+    //  Admin changes mid-proposal
+    // ---------------------------------------------------------------
+
+    /// @dev Changing votingPeriod after a proposal is created must not affect its endTime.
+    function test_setVotingPeriod_doesNotAffectExistingProposal() public {
+        uint256 id = _propose(alice, 50e18, bob, "spend");
+        uint256 originalEnd = dao.proposals(id).endTime;
+
+        dao.setVotingPeriod(2 days);
+
+        assertEq(dao.proposals(id).endTime, originalEnd);
+    }
+
+    /// @dev Swapping the staking vault invalidates unresolved proposals' voting power source,
+    ///      but the proposal id, amount, lock, etc. remain intact.
+    function test_setStakingVault_midProposal_preservesProposal() public {
+        uint256 id = _propose(alice, 100e18, bob, "spend");
+
+        StakingVault v = new StakingVault(address(stakeToken), address(rewardToken), owner, TOP_COUNT);
+        v.setDaoAddress(address(dao));
+        dao.setStakingVault(address(v));
+
+        ITreasuryDAO.Proposal memory p = dao.proposals(id);
+        assertEq(p.amount, 100e18);
+        assertEq(dao.lockedAmount(), 100e18);
+
+        // Alice no longer has voting power under the new (empty) vault
+        vm.prank(alice);
+        vm.expectRevert("no voting power");
+        dao.castVote(id, true);
+    }
+
+    // ---------------------------------------------------------------
+    //  Additional helpers
+    // ---------------------------------------------------------------
+
+    function _stakeInto(StakingVault v, address user, uint256 amount) internal {
+        stakeToken.mint(user, amount);
+        vm.startPrank(user);
+        stakeToken.approve(address(v), amount);
+        v.stake(amount);
+        vm.stopPrank();
+    }
+
+    // ---------------------------------------------------------------
     //  Helpers
     // ---------------------------------------------------------------
 

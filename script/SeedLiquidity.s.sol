@@ -34,7 +34,7 @@ interface IPulseXFactory {
 ///   - Dev wallet currently holds the full 1e27 TSTT mint
 ///   - tradingEnabled = true
 contract SeedLiquidityScript is Script {
-    address constant TSTT          = 0x584cb57d12dDea0c8A20299f1e972fFF6f581161;
+    address constant TSTT          = 0xAbEaBFE146F347537b82426B4c4d8F1E768721C7;
     address constant PULSEX_ROUTER = 0x165C3410fC91EF562C50559f7d2289fEbed552d9;
     address constant DEV_WALLET    = 0xa0419404eF7b81d9Ec64367eb68e5f425EACE618;
 

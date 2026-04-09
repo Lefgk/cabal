@@ -13,7 +13,10 @@ import "forge-std/Script.sol";
 ///   initialSupply  1,000,000,000 * 1e18
 ///   tradingEnabled true
 ///   taxes:
-///     0: Yield (4)       3.25% → StakingVault, reward eHEX
+///     0: Dev   (2)       3.25% → StakingVault, reward eHEX (was Yield(4) in prior
+///                        clones; switched because v3 Yield is a holder-reflection
+///                        pool that ignores tax.receiver — Dev type swaps WPLS→eHEX
+///                        and transfers directly to receiver, which is what we want)
 ///     1: Dev   (2)       1.00% → dev wallet, reward PLS
 ///     2: Liquify (5)     0.25% auto-LP
 ///     3: ExternalBurn(1) 0.25% burn external token 0x90F0...a050 to dead
@@ -82,13 +85,15 @@ contract CreateStakeTokenScript is Script {
 
         Tax[] memory taxes = new Tax[](5);
 
-        // 0: Yield 3.25% in eHEX → StakingVault
+        // 0: Dev 3.25% reward in eHEX → DEV_WALLET (placeholder; will updateTaxReceiver
+        //    to the fresh StakingVault immediately after token creation). Dev type is
+        //    the only tax code path that actually honors tax.receiver for non-PLS rewards.
         taxes[0] = Tax({
             id: 0,
-            taxType: 4,            // Yield
+            taxType: 2,            // Dev
             taxMoment: 0,          // Both
             percentage: 325,
-            receiver: STAKING_VAULT,
+            receiver: DEV_WALLET,
             tokenAddress: eHEX,
             burnAddress: DEAD,
             rewardInPls: false,

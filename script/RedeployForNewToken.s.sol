@@ -18,7 +18,7 @@ import {TreasuryDAO} from "../src/TreasuryDAO.sol";
 /// updateTaxReceiver passes the onlyOwner check.
 contract RedeployForNewTokenScript is Script {
     // ── New token deployed in CreateStakeTokenScript ──────────────────────
-    address constant NEW_TSTT = 0x584cb57d12dDea0c8A20299f1e972fFF6f581161;
+    address constant NEW_TSTT = 0xAbEaBFE146F347537b82426B4c4d8F1E768721C7;
 
     // ── PulseChain constants (mirrors DeployAll.s.sol) ────────────────────
     address constant WPLS          = 0xA1077a294dDE1B09bB078844df40758a5D0f9a27;

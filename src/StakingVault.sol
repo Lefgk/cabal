@@ -46,6 +46,18 @@ contract StakingVault is IStakingVault, Ownable, ReentrancyGuard {
     mapping(address => uint256) public userRewardPerTokenPaid;
     mapping(address => uint256) public rewards;
 
+    /// @notice Running sum of rewards that have been dripped into the accumulator
+    ///         but not yet paid out. Invariant:
+    ///         totalOwed ==
+    ///           sum_i(rewards[i])  // materialized-but-unclaimed
+    ///         + sum_i(balance_i * (rewardPerTokenStored - userRewardPerTokenPaid_i) / 1e18)
+    ///                              // accrued-but-unmaterialized
+    ///         It excludes the future (undripped) portion of the current period,
+    ///         which equals `(periodFinish - now) * rewardRate`.
+    ///         Needed so `processRewards()` can tell genuinely-new reward tokens
+    ///         apart from already-committed ones sitting in the vault balance.
+    uint256 public totalOwed;
+
     // -------------------------------------------------------------------------
     // Staking state
     // -------------------------------------------------------------------------
@@ -95,7 +107,14 @@ contract StakingVault is IStakingVault, Ownable, ReentrancyGuard {
     }
 
     modifier updateReward(address account) {
-        rewardPerTokenStored = rewardPerToken();
+        uint256 newRPT = rewardPerToken();
+        // When supply is zero, rewardPerToken() returns stored unchanged so the
+        // delta is zero; the drip during a zero-supply window is effectively
+        // held aside and re-enters via processRewards later.
+        if (newRPT > rewardPerTokenStored && _totalSupply > 0) {
+            totalOwed += ((newRPT - rewardPerTokenStored) * _totalSupply) / 1e18;
+        }
+        rewardPerTokenStored = newRPT;
         lastUpdateTime = lastTimeRewardApplicable();
         if (account != address(0)) {
             rewards[account] = earned(account);
@@ -204,6 +223,14 @@ contract StakingVault is IStakingVault, Ownable, ReentrancyGuard {
         uint256 reward = rewards[msg.sender];
         if (reward > 0) {
             rewards[msg.sender] = 0;
+            // Round-down dust in totalOwed accounting could otherwise underflow
+            // if a single user's payout briefly exceeds the running total. Cap
+            // at totalOwed for safety; the dust is bounded by O(num_stakers).
+            if (reward > totalOwed) {
+                totalOwed = 0;
+            } else {
+                totalOwed -= reward;
+            }
             REWARDS_TOKEN.safeTransfer(msg.sender, reward);
             emit RewardPaid(msg.sender, reward);
         }
@@ -281,12 +308,19 @@ contract StakingVault is IStakingVault, Ownable, ReentrancyGuard {
     ///         Anyone can call this — it simply processes already-received tokens.
     function processRewards() external nonReentrant updateReward(address(0)) {
         uint256 balance = REWARDS_TOKEN.balanceOf(address(this));
-
-        // Calculate how many reward tokens are "owed" (committed to current drip)
-        uint256 committed;
-        if (block.timestamp < periodFinish) {
-            committed = (periodFinish - block.timestamp) * rewardRate;
+        // When the staking token IS the reward token, the staked principal sits
+        // in the same balance — exclude it so stakes can't be paid out as rewards.
+        if (address(STAKING_TOKEN) == address(REWARDS_TOKEN)) {
+            balance -= _totalSupply;
         }
+
+        // committed = already-accrued (totalOwed, includes both materialized and
+        // unmaterialized) + still-to-drip portion of the current period.
+        uint256 futureDrip;
+        if (block.timestamp < periodFinish) {
+            futureDrip = (periodFinish - block.timestamp) * rewardRate;
+        }
+        uint256 committed = totalOwed + futureDrip;
 
         // Excess = balance minus committed rewards
         require(balance > committed, "StakingVault: no new rewards");
@@ -387,8 +421,15 @@ contract StakingVault is IStakingVault, Ownable, ReentrancyGuard {
         }
 
         uint256 balance = REWARDS_TOKEN.balanceOf(address(this));
+        if (address(STAKING_TOKEN) == address(REWARDS_TOKEN)) {
+            balance -= _totalSupply;
+        }
+        // Solvency: the new rewardRate must be sustainable from the funds that
+        // are NOT already promised to existing stakers (totalOwed).
+        require(balance >= totalOwed, "StakingVault: insolvent");
+        uint256 available = balance - totalOwed;
         require(
-            rewardRate <= balance / rewardsDuration,
+            rewardRate <= available / rewardsDuration,
             "StakingVault: reward too high"
         );
 
