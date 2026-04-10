@@ -180,6 +180,14 @@ export const STAKING_VAULT_ABI = [
     inputs: [],
     outputs: [{ name: '', type: 'uint256' }],
   },
+  // Vote lock
+  {
+    name: 'voteLockEnd',
+    type: 'function',
+    stateMutability: 'view',
+    inputs: [{ name: 'user', type: 'address' }],
+    outputs: [{ name: '', type: 'uint256' }],
+  },
   // Extra state
   {
     name: 'paused',

@@ -696,11 +696,16 @@ contract TreasuryDAOTest is Test {
     // ---------------------------------------------------------------
 
     /// @dev Voter's weight at vote time is snapshotted and not changed by later un/re-stake.
+    ///      Vote-lock prevents withdraw during the active voting period, so we
+    ///      warp past the proposal end before withdrawing.
     function test_castVote_weightSnapshot_ignoresLaterStakeChanges() public {
         uint256 id = _propose(alice, 50e18, bob, "spend");
 
         vm.prank(alice);
         dao.castVote(id, true);
+
+        // Warp past proposal end so withdraw is unlocked
+        vm.warp(block.timestamp + 7 days + 1);
 
         // Alice withdraws most of her stake AFTER voting
         vm.prank(alice);
@@ -905,6 +910,86 @@ contract TreasuryDAOTest is Test {
         vm.prank(alice);
         vm.expectRevert("no voting power");
         dao.castVote(id, true);
+    }
+
+    // ---------------------------------------------------------------
+    //  Vote-lock: withdraw blocked while active vote
+    // ---------------------------------------------------------------
+
+    function test_voteLock_withdrawRevertsWhileLocked() public {
+        uint256 id = _propose(alice, 50e18, bob, "spend");
+
+        vm.prank(alice);
+        dao.castVote(id, true);
+
+        // Attempt withdraw while vote is active — should revert
+        vm.prank(alice);
+        vm.expectRevert("StakingVault: tokens locked by active vote");
+        vault.withdraw(10e18);
+    }
+
+    function test_voteLock_withdrawSucceedsAfterProposalEnds() public {
+        uint256 id = _propose(alice, 50e18, bob, "spend");
+
+        vm.prank(alice);
+        dao.castVote(id, true);
+
+        // Warp past proposal end
+        vm.warp(block.timestamp + 7 days + 1);
+
+        // Withdraw should succeed now
+        vm.prank(alice);
+        vault.withdraw(10e18);
+        assertEq(vault.stakedBalance(alice), 90e18);
+    }
+
+    function test_voteLock_twoProposals_lockedUntilLatestEnds() public {
+        // Proposal 1: created now, ends in 7 days
+        uint256 id1 = _propose(alice, 50e18, bob, "spend 1");
+
+        vm.prank(alice);
+        dao.castVote(id1, true);
+
+        // Proposal 2: created 3 days later, ends in 10 days from start
+        vm.warp(block.timestamp + 3 days);
+        uint256 id2 = _propose(bob, 50e18, carol, "spend 2");
+
+        vm.prank(alice);
+        dao.castVote(id2, true);
+
+        // Warp past proposal 1 end (7 days from start = 4 days from now)
+        vm.warp(block.timestamp + 4 days + 1);
+
+        // Still locked — proposal 2 hasn't ended yet (ends 7 days after it was created)
+        vm.prank(alice);
+        vm.expectRevert("StakingVault: tokens locked by active vote");
+        vault.withdraw(10e18);
+
+        // Warp past proposal 2 end
+        vm.warp(block.timestamp + 3 days);
+
+        // Now withdraw succeeds
+        vm.prank(alice);
+        vault.withdraw(10e18);
+        assertEq(vault.stakedBalance(alice), 90e18);
+    }
+
+    function test_voteLock_nonDaoCannotCallLockForVote() public {
+        vm.prank(alice);
+        vm.expectRevert("StakingVault: caller is not DAO");
+        vault.lockForVote(alice, block.timestamp + 7 days);
+    }
+
+    function test_voteLock_exitRevertsWhileLocked() public {
+        uint256 id = _propose(alice, 50e18, bob, "spend");
+
+        vm.prank(alice);
+        dao.castVote(id, true);
+
+        // exit() calls withdraw() internally, should also revert
+        vm.prank(alice);
+        vm.expectRevert("StakingVault: tokens locked by active vote");
+        vault.exit();
     }
 
     // ---------------------------------------------------------------

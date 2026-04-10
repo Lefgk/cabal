@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { useAccount } from 'wagmi';
+import { useState, useEffect, useCallback } from 'react';
+import { useAccount, useSignMessage } from 'wagmi';
 import { useReadContract, useReadContracts, useSafeWriteContract, prettyError } from '../hooks/usePls.js';
 import { useSimulateContract } from 'wagmi';
 import { formatEther, parseEther, isAddress } from 'viem';
@@ -7,6 +7,8 @@ import { ADDRESSES } from '../config/contracts.js';
 import { TREASURY_DAO_ABI, STAKING_VAULT_ABI } from '../config/abis.js';
 import { PULSECHAIN_ID } from '../config/wagmi.js';
 import TokenIcon from './TokenIcon.jsx';
+
+const API_BASE = import.meta.env.VITE_API_URL || 'https://cabal-comments-production.up.railway.app';
 
 const daoAddr = ADDRESSES.treasuryDAO;
 const vaultAddr = ADDRESSES.stakingVault;
@@ -26,6 +28,15 @@ const fmtCountdown = (seconds) => {
   return `${m}m`;
 };
 const shortAddr = (a) => `${a.slice(0, 6)}…${a.slice(-4)}`;
+
+const relativeTime = (timestamp) => {
+  const now = Date.now();
+  const diff = Math.max(0, Math.floor((now - new Date(timestamp).getTime()) / 1000));
+  if (diff < 60) return `${diff}s ago`;
+  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+  return `${Math.floor(diff / 86400)}d ago`;
+};
 
 export default function Proposals() {
   const { address } = useAccount();
@@ -271,6 +282,10 @@ function ProposalCard({ proposal, address, busy, isOnWrongChain, writeContract, 
           <div><strong>Proposer:</strong> <a href={`https://otter.pulsechain.com/address/${p.proposer}`} target="_blank" rel="noopener noreferrer" className="address-link" onClick={(e) => e.stopPropagation()}>{p.proposer}</a></div>
           <div><strong>Created:</strong> {fmtDate(p.startTime)}</div>
           <div><strong>Executed:</strong> {p.executed ? 'Yes' : 'No'}</div>
+
+          <div onClick={(e) => e.stopPropagation()}>
+            <CommentsSection proposalId={Number(p.id)} expanded={expanded} />
+          </div>
         </div>
       )}
 
@@ -449,6 +464,122 @@ function CreateProposalForm({ writeContract, busy, isOnWrongChain, address, isTo
       >
         {isSimulating ? 'Simulating…' : 'Submit'}
       </button>
+    </div>
+  );
+}
+
+function CommentsSection({ proposalId, expanded }) {
+  const { address } = useAccount();
+  const { signMessageAsync } = useSignMessage();
+  const [comments, setComments] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [message, setMessage] = useState('');
+  const [posting, setPosting] = useState(false);
+  const [error, setError] = useState(null);
+
+  const fetchComments = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/comments/${proposalId}`);
+      if (!res.ok) throw new Error('Failed to load comments');
+      const data = await res.json();
+      setComments(data);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }, [proposalId]);
+
+  useEffect(() => {
+    if (expanded) fetchComments();
+  }, [expanded, fetchComments]);
+
+  const handlePost = async () => {
+    if (!message.trim() || !address) return;
+    setPosting(true);
+    setError(null);
+    try {
+      const text = message.trim();
+      const sigMsg = `Comment on proposal #${proposalId}: ${text}`;
+      const signature = await signMessageAsync({ message: sigMsg });
+      const res = await fetch(`${API_BASE}/api/comments`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ proposalId, address, message: text, signature }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error || 'Failed to post comment');
+      }
+      setMessage('');
+      await fetchComments();
+    } catch (err) {
+      if (err.name !== 'UserRejectedRequestError') {
+        setError(err.message);
+      }
+    } finally {
+      setPosting(false);
+    }
+  };
+
+  return (
+    <div className="comments-section">
+      <h4 style={{ margin: '16px 0 10px', color: 'var(--text-bright)', fontSize: 14 }}>
+        Comments {comments.length > 0 ? `(${comments.length})` : ''}
+      </h4>
+
+      {loading && <p style={{ fontSize: 12, color: 'var(--text)' }}>Loading comments...</p>}
+      {error && <p style={{ fontSize: 12, color: 'var(--red)' }}>{error}</p>}
+
+      {!loading && comments.length === 0 && (
+        <p style={{ fontSize: 12, color: 'var(--text)' }}>No comments yet. Be the first to comment.</p>
+      )}
+
+      <div className="comments-list">
+        {comments.map((c, i) => (
+          <div key={c.id || i} className="comment-card">
+            <div className="comment-avatar">
+              {(c.address || '0x').slice(2, 4).toUpperCase()}
+            </div>
+            <div className="comment-body">
+              <div className="comment-header">
+                <a
+                  href={`https://otter.pulsechain.com/address/${c.address}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="address-link"
+                  style={{ fontSize: 12 }}
+                >
+                  {shortAddr(c.address)}
+                </a>
+                <span className="comment-time">{relativeTime(c.createdAt || c.timestamp)}</span>
+              </div>
+              <p className="comment-text">{c.message}</p>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {address && (
+        <div className="comment-form">
+          <textarea
+            placeholder="Add a comment..."
+            value={message}
+            onChange={(e) => setMessage(e.target.value)}
+            rows={2}
+            className="comment-textarea"
+          />
+          <button
+            onClick={handlePost}
+            disabled={posting || !message.trim()}
+            className="comment-post-btn"
+          >
+            {posting ? 'Posting...' : 'Post Comment'}
+          </button>
+        </div>
+      )}
     </div>
   );
 }

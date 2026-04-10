@@ -99,6 +99,12 @@ contract StakingVault is IStakingVault, Ownable, ReentrancyGuard {
     address public daoAddress;
 
     // -------------------------------------------------------------------------
+    // Vote lock
+    // -------------------------------------------------------------------------
+
+    mapping(address => uint256) public voteLockEnd;
+
+    // -------------------------------------------------------------------------
     // Pause
     // -------------------------------------------------------------------------
 
@@ -220,6 +226,7 @@ contract StakingVault is IStakingVault, Ownable, ReentrancyGuard {
     }
 
     function withdraw(uint256 amount) public nonReentrant autoProcess updateReward(msg.sender) {
+        require(block.timestamp > voteLockEnd[msg.sender], "StakingVault: tokens locked by active vote");
         require(amount > 0, "StakingVault: zero withdraw");
         require(_balances[msg.sender] >= amount, "StakingVault: insufficient balance");
 
@@ -495,6 +502,18 @@ contract StakingVault is IStakingVault, Ownable, ReentrancyGuard {
     function recoverERC20(address token, uint256 amount) external onlyOwner {
         require(token != address(STAKING_TOKEN), "StakingVault: cannot recover staking token");
         IERC20(token).safeTransfer(owner(), amount);
+    }
+
+    // -------------------------------------------------------------------------
+    // Vote lock — called by DAO after castVote
+    // -------------------------------------------------------------------------
+
+    function lockForVote(address voter, uint256 lockUntil) external {
+        require(msg.sender == daoAddress, "StakingVault: caller is not DAO");
+        if (lockUntil > voteLockEnd[voter]) {
+            voteLockEnd[voter] = lockUntil;
+        }
+        emit VoteLocked(voter, voteLockEnd[voter]);
     }
 
     // -------------------------------------------------------------------------

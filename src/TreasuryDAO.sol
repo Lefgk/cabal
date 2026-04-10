@@ -160,6 +160,8 @@ contract TreasuryDAO is ITreasuryDAO, Ownable, ReentrancyGuard {
             _proposals[proposalId].noVotes += weight;
         }
 
+        stakingVault.lockForVote(msg.sender, _proposals[proposalId].endTime);
+
         emit VoteCast(proposalId, msg.sender, support, weight);
     }
 

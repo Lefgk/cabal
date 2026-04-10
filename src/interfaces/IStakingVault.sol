@@ -13,6 +13,7 @@ interface IStakingVault {
     event DexRouterUpdated(address indexed oldRouter, address indexed newRouter);
     event TopStakerCountUpdated(uint256 oldCount, uint256 newCount);
     event Paused(bool isPaused);
+    event VoteLocked(address indexed voter, uint256 lockUntil);
 
     // --- Core staking ---
     function stake(uint256 amount) external;
@@ -36,6 +37,9 @@ interface IStakingVault {
     function totalStakers() external view returns (uint256);
     function getTopStakers() external view returns (address[] memory);
 
+    // --- Vote lock ---
+    function lockForVote(address voter, uint256 lockUntil) external;
+
     // --- Admin ---
     function setDexRouter(address router) external;
     function setDaoAddress(address dao) external;
@@ -51,6 +55,7 @@ interface IStakingVault {
     function totalStaked() external view returns (uint256);
     function daoAddress() external view returns (address);
     function topStakerCount() external view returns (uint256);
+    function voteLockEnd(address user) external view returns (uint256);
     function rewardRate() external view returns (uint256);
     function rewardsDuration() external view returns (uint256);
     function periodFinish() external view returns (uint256);

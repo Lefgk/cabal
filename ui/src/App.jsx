@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { useAccount, useConnect, useDisconnect, useChainId, useSwitchChain } from 'wagmi';
 import Staking from './components/Staking.jsx';
 import Treasury from './components/Treasury.jsx';
@@ -61,7 +61,15 @@ function WrongChainBanner() {
   );
 }
 
+const TABS = [
+  { key: 'token', label: 'Token' },
+  { key: 'staking', label: 'Staking' },
+  { key: 'dao', label: 'DAO' },
+];
+
 function App() {
+  const [activeTab, setActiveTab] = useState('token');
+
   return (
     <>
       <header className="app-header">
@@ -71,11 +79,27 @@ function App() {
 
       <WrongChainBanner />
 
+      <nav className="tab-bar">
+        {TABS.map((tab) => (
+          <button
+            key={tab.key}
+            className={`tab-pill${activeTab === tab.key ? ' tab-pill--active' : ''}`}
+            onClick={() => setActiveTab(tab.key)}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </nav>
+
       <div className="sections">
-        <Staking />
-        <Treasury />
-        <TokenInfo />
-        <Proposals />
+        {activeTab === 'token' && <TokenInfo />}
+        {activeTab === 'staking' && <Staking />}
+        {activeTab === 'dao' && (
+          <>
+            <Treasury />
+            <Proposals />
+          </>
+        )}
       </div>
     </>
   );

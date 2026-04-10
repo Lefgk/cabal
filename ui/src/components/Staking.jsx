@@ -103,6 +103,10 @@ export default function Staking() {
     address: vaultAddr, abi: STAKING_VAULT_ABI, functionName: 'isTopStaker',
     args: [address], query: { enabled: !!address },
   });
+  const { data: voteLockEndRaw } = useReadContract({
+    address: vaultAddr, abi: STAKING_VAULT_ABI, functionName: 'voteLockEnd',
+    args: [address], query: { enabled: !!address },
+  });
   const { data: allowance } = useReadContract({
     address: tokenAddr, abi: ERC20_ABI, functionName: 'allowance',
     args: [address, vaultAddr], query: { enabled: !!address },
@@ -167,6 +171,13 @@ export default function Staking() {
     const secsPerTick = totalStaked / scaled;
     return { secsPerTick };
   })();
+
+  // Vote lock: user cannot withdraw/exit while voteLockEnd > now
+  const voteLockEnd = voteLockEndRaw ? Number(voteLockEndRaw) : 0;
+  const voteLocked = voteLockEnd > 0 && now <= voteLockEnd;
+  const voteLockDate = voteLocked
+    ? new Date(voteLockEnd * 1000).toLocaleString()
+    : null;
 
   // Only flag as needing approval when the user has entered a valid amount
   // that exceeds the current allowance. An empty input should NOT force the
@@ -265,7 +276,7 @@ export default function Staking() {
       </div>
 
       <p className="help-text">
-        Stake {stkSymbol} to earn {rwdSymbol}. Rewards drip linearly over {durationLabel}. Top 100 stakers can create DAO proposals. No lock-up — withdraw anytime.
+        Stake {stkSymbol} to earn {rwdSymbol}. Rewards drip linearly over {durationLabel}. Top 100 stakers can create DAO proposals. Withdraw anytime unless you have an active vote.
       </p>
 
       {isActive && getRewardForDuration && (
@@ -413,14 +424,29 @@ export default function Staking() {
 
       <div className="input-group">
         <input type="text" placeholder="Amount to withdraw" value={withdrawAmount} onChange={(e) => setWithdrawAmount(e.target.value)} disabled={!address} />
-        <button onClick={handleWithdraw} disabled={!address || busy || isOnWrongChain || !withdrawAmount}>Withdraw</button>
+        <button onClick={handleWithdraw} disabled={!address || busy || isOnWrongChain || !withdrawAmount || voteLocked}>Withdraw</button>
       </div>
 
       <div className="input-group">
         <button className="btn-green" onClick={handleClaim} disabled={!address || busy || isOnWrongChain}>Claim Rewards</button>
-        <button className="btn-red" onClick={handleExit} disabled={!address || busy || isOnWrongChain}>Exit (Withdraw All + Claim)</button>
+        <button className="btn-red" onClick={handleExit} disabled={!address || busy || isOnWrongChain || voteLocked}>Exit (Withdraw All + Claim)</button>
       </div>
 
+      {voteLocked && (
+        <p
+          className="help-text"
+          style={{
+            marginTop: 8,
+            padding: '8px 10px',
+            border: '1px solid rgba(234,179,8,0.35)',
+            background: 'rgba(234,179,8,0.08)',
+            borderRadius: 6,
+            color: '#eab308',
+          }}
+        >
+          Tokens locked until {voteLockDate} (active vote). You can still stake and claim rewards.
+        </p>
+      )}
       {!address && (
         <p className="help-text" style={{ marginTop: 8 }}>Connect wallet to stake.</p>
       )}
