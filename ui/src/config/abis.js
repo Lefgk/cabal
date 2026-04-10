@@ -172,6 +172,14 @@ export const STAKING_VAULT_ABI = [
     inputs: [],
     outputs: [{ name: '', type: 'address' }],
   },
+  // Reward accounting
+  {
+    name: 'totalOwed',
+    type: 'function',
+    stateMutability: 'view',
+    inputs: [],
+    outputs: [{ name: '', type: 'uint256' }],
+  },
   // Extra state
   {
     name: 'paused',

@@ -119,6 +119,15 @@ export default function Staking() {
     address: vaultAddr,
     query: { refetchInterval: 10000 },
   });
+  // totalOwed = rewards already credited to stakers but not yet claimed.
+  const { data: totalOwed } = useReadContract({
+    address: vaultAddr, abi: STAKING_VAULT_ABI, functionName: 'totalOwed',
+  });
+  // pHEX balance sitting in the vault (dripping + unclaimed + dust).
+  const { data: vaultPhexBal } = useReadContract({
+    address: rewardsTokenAddr, abi: ERC20_ABI, functionName: 'balanceOf',
+    args: [vaultAddr], query: { enabled: !!rewardsTokenAddr },
+  });
 
   // Derived values — tick `now` every second so the countdown updates live
   const [now, setNow] = useState(Math.floor(Date.now() / 1000));
@@ -345,6 +354,26 @@ export default function Staking() {
         <div className="stat-box">
           <span className="stat-label">Ends In</span>
           <span className="stat-value">{isActive ? formatCountdown(timeLeft) : '—'}</span>
+        </div>
+      </div>
+
+      <h3 style={{ marginTop: 20, marginBottom: 8 }}>Vault Health</h3>
+      <div className="stats-grid">
+        <div className="stat-box" title="Total pHEX held by the vault (active drip + unclaimed rewards + dust)">
+          <span className="stat-label">Vault {rwdSymbol}</span>
+          <span className="stat-value">{fmtRwd(vaultPhexBal, rwdDec)} <TokenIcon symbol={rwdSymbol} />{rwdSymbol}</span>
+        </div>
+        <div className="stat-box" title="pHEX already credited to stakers' Claimable balances but not yet withdrawn">
+          <span className="stat-label">Unclaimed</span>
+          <span className="stat-value">{fmtRwd(totalOwed, rwdDec)} <TokenIcon symbol={rwdSymbol} />{rwdSymbol}</span>
+        </div>
+        <div className="stat-box" title="pHEX remaining in the active 7-day drip (vault balance minus what's already owed to stakers)">
+          <span className="stat-label">Drip Budget</span>
+          <span className="stat-value">
+            {vaultPhexBal !== undefined && totalOwed !== undefined
+              ? fmtRwd(vaultPhexBal > totalOwed ? vaultPhexBal - totalOwed : 0n, rwdDec)
+              : '...'} <TokenIcon symbol={rwdSymbol} />{rwdSymbol}
+          </span>
         </div>
       </div>
 

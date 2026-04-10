@@ -57,6 +57,12 @@ export default function Proposals() {
   const { data: availableBalance } = useReadContract({
     address: daoAddr, abi: TREASURY_DAO_ABI, functionName: 'availableBalance',
   });
+  const { data: lockedAmount } = useReadContract({
+    address: daoAddr, abi: TREASURY_DAO_ABI, functionName: 'lockedAmount',
+  });
+  const { data: votingPeriod } = useReadContract({
+    address: daoAddr, abi: TREASURY_DAO_ABI, functionName: 'votingPeriod',
+  });
 
   const count = proposalCount ? Number(proposalCount) : 0;
 
@@ -100,6 +106,36 @@ export default function Proposals() {
       <p className="help-text">
         Top stakers propose, all stakers vote (weight = stake). Needs quorum + majority Yes to pass.
       </p>
+
+      <div className="stats-grid" style={{ marginBottom: 16 }}>
+        <div className="stat-box" title="WPLS available for new proposals (total minus locked by active proposals)">
+          <span className="stat-label">Treasury Available</span>
+          <span className="stat-value">{availableBalance !== undefined ? fmtTok(availableBalance) : '...'} <TokenIcon symbol="WPLS" />WPLS</span>
+        </div>
+        <div className="stat-box" title="WPLS locked by active/pending proposals — released when proposals execute or expire">
+          <span className="stat-label">Locked</span>
+          <span className="stat-value">{lockedAmount !== undefined ? fmtTok(lockedAmount) : '...'} <TokenIcon symbol="WPLS" />WPLS</span>
+        </div>
+        <div className="stat-box" title="Total WPLS in the DAO treasury (available + locked)">
+          <span className="stat-label">Total Treasury</span>
+          <span className="stat-value">
+            {availableBalance !== undefined && lockedAmount !== undefined
+              ? fmtTok(availableBalance + lockedAmount)
+              : '...'} <TokenIcon symbol="WPLS" />WPLS
+          </span>
+        </div>
+      </div>
+
+      <div className="stats-grid" style={{ marginBottom: 16 }}>
+        <div className="stat-box" title="Percentage of total staked supply needed in votes for a proposal to pass">
+          <span className="stat-label">Quorum</span>
+          <span className="stat-value">{quorumBps !== undefined ? `${Number(quorumBps) / 100}%` : '...'}</span>
+        </div>
+        <div className="stat-box">
+          <span className="stat-label">Vote Duration</span>
+          <span className="stat-value">{votingPeriod ? `${Number(votingPeriod) / 86400}d` : '...'}</span>
+        </div>
+      </div>
 
       {count === 0 && <p style={{ color: 'var(--text)' }}>No proposals yet.</p>}
 
