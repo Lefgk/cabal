@@ -141,11 +141,9 @@ contract VaultDAOIntegrationTest is Test {
         tstt.transfer(to, amount);
     }
 
-    /// @dev Fund the DAO treasury with WPLS so proposals can be made.
+    /// @dev Fund the DAO treasury with raw PLS so proposals can be made.
     function _fundTreasury(uint256 amount) internal {
-        wpls.mint(address(this), amount);
-        wpls.approve(address(dao), amount);
-        dao.depositWPLS(amount);
+        vm.deal(address(dao), address(dao).balance + amount);
     }
 
     // ---------------------------------------------------------------
@@ -346,8 +344,8 @@ contract VaultDAOIntegrationTest is Test {
 
         // Carol can propose (she's a top staker).
         vm.prank(carol);
-        uint256 pid = dao.propose(100e18, marketingWallet, "marketing");
-        assertEq(pid, 0);
+        uint256 pid = dao.propose(100e18, marketingWallet, "marketing", ITreasuryDAO.ActionType.SendPLS, address(0), "");
+        assertEq(pid, 1);
 
         // Dave now stakes 200 → becomes #1 top staker, evicts Carol.
         vm.prank(dave);
@@ -359,12 +357,12 @@ contract VaultDAOIntegrationTest is Test {
         // Carol can no longer propose.
         vm.prank(carol);
         vm.expectRevert("not top staker");
-        dao.propose(50e18, marketingWallet, "another");
+        dao.propose(50e18, marketingWallet, "another", ITreasuryDAO.ActionType.SendPLS, address(0), "");
 
         // Dave can propose now.
         vm.prank(dave);
-        uint256 pid2 = dao.propose(50e18, marketingWallet, "dave-prop");
-        assertEq(pid2, 1);
+        uint256 pid2 = dao.propose(50e18, marketingWallet, "dave-prop", ITreasuryDAO.ActionType.SendPLS, address(0), "");
+        assertEq(pid2, 2);
     }
 
     // ---------------------------------------------------------------
@@ -372,6 +370,9 @@ contract VaultDAOIntegrationTest is Test {
     // ---------------------------------------------------------------
 
     function test_daoProposalLifecycle_propose_vote_execute() public {
+        // Lower minVoters for this lifecycle test (only 2 stakers)
+        dao.setMinVoters(2);
+
         // Alice & Bob stake so they have voting power.
         _fundAndApprove(alice, 600e18);
         _fundAndApprove(bob, 400e18);
@@ -389,7 +390,7 @@ contract VaultDAOIntegrationTest is Test {
 
         // Alice (top staker) proposes 200 WPLS to marketing.
         vm.prank(alice);
-        uint256 pid = dao.propose(200e18, marketingWallet, "marketing push");
+        uint256 pid = dao.propose(200e18, marketingWallet, "marketing push", ITreasuryDAO.ActionType.SendPLS, address(0), "");
 
         // Locked amount reserved.
         assertEq(dao.lockedAmount(), 200e18);
@@ -413,12 +414,14 @@ contract VaultDAOIntegrationTest is Test {
         dao.executeProposal(pid);
 
         assertEq(uint8(dao.state(pid)), uint8(ITreasuryDAO.ProposalState.Executed));
-        assertEq(wpls.balanceOf(marketingWallet), 200e18);
+        assertEq(marketingWallet.balance, 200e18);
         assertEq(dao.lockedAmount(), 0);
         assertEq(dao.availableBalance(), 300e18);
     }
 
     function test_daoProposal_defeated_unlocksFunds() public {
+        dao.setMinVoters(2);
+
         _fundAndApprove(alice, 600e18);
         _fundAndApprove(bob, 400e18);
         vm.prank(alice);
@@ -431,9 +434,9 @@ contract VaultDAOIntegrationTest is Test {
         _fundTreasury(500e18);
 
         vm.prank(alice);
-        uint256 pid = dao.propose(200e18, marketingWallet, "bad idea");
+        uint256 pid = dao.propose(200e18, marketingWallet, "bad idea", ITreasuryDAO.ActionType.SendPLS, address(0), "");
 
-        // Bob (40% of stake, enough for quorum) votes NO; Alice does not vote.
+        // Bob votes NO; Alice does not vote.
         vm.prank(bob);
         dao.castVote(pid, false);
 
@@ -709,6 +712,8 @@ contract VaultDAOIntegrationTest is Test {
     // ---------------------------------------------------------------
 
     function test_daoVote_usesLiveStakeAtVoteTime() public {
+        dao.setMinVoters(2);
+
         _fundAndApprove(alice, 500e18);
         _fundAndApprove(bob, 500e18);
         vm.prank(alice);
@@ -721,7 +726,7 @@ contract VaultDAOIntegrationTest is Test {
         _fundTreasury(1_000e18);
 
         vm.prank(alice);
-        uint256 pid = dao.propose(100e18, marketingWallet, "p");
+        uint256 pid = dao.propose(100e18, marketingWallet, "p", ITreasuryDAO.ActionType.SendPLS, address(0), "");
 
         // Alice withdraws 400 — her live balance drops to 100 before voting.
         vm.prank(alice);

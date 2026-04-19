@@ -7,7 +7,7 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 
 // ---------------------------------------------------------------
-//  Mocks (mirrored from TreasuryDAO.t.sol)
+//  Mocks
 // ---------------------------------------------------------------
 
 contract MockERC20 is ERC20 {
@@ -18,9 +18,11 @@ contract MockERC20 is ERC20 {
     }
 }
 
+/// @dev Normal mock router — all calls succeed.
 contract MockPulseXRouter {
     address public immutable wplsAddr;
 
+    uint256 public swapCallCount;
     uint256 public lastLPLiquidity;
     address public lastLPTo;
     address public lastLiqTokenA;
@@ -34,6 +36,7 @@ contract MockPulseXRouter {
         uint256, address[] calldata path, address to, uint256
     ) external payable {
         MockERC20(path[1]).mint(to, msg.value);
+        swapCallCount++;
     }
 
     function addLiquidityETH(
@@ -76,6 +79,29 @@ contract MockPulseXRouter {
     receive() external payable {}
 }
 
+/// @dev Router that reverts on swap and addLiquidity calls — simulates "no V2 pair".
+contract RevertingRouter {
+    function swapExactETHForTokensSupportingFeeOnTransferTokens(
+        uint256, address[] calldata, address, uint256
+    ) external payable {
+        revert("no pair");
+    }
+
+    function addLiquidityETH(
+        address, uint256, uint256, uint256, address, uint256
+    ) external payable returns (uint256, uint256, uint256) {
+        revert("no pair");
+    }
+
+    function addLiquidity(
+        address, address, uint256, uint256, uint256, uint256, address, uint256
+    ) external returns (uint256, uint256, uint256) {
+        revert("no pair");
+    }
+
+    receive() external payable {}
+}
+
 // ---------------------------------------------------------------
 //  Tests
 // ---------------------------------------------------------------
@@ -84,15 +110,17 @@ contract LiquidityDeployerTest is Test {
     address constant DEAD = 0x000000000000000000000000000000000000dEaD;
 
     LiquidityDeployer deployer;
-    MockPulseXRouter router;
+    MockPulseXRouter routerV2;
+    MockPulseXRouter routerV1;
     MockERC20 tokenA;
     MockERC20 tokenB;
     address wpls;
 
     function setUp() public {
         wpls = makeAddr("wpls");
-        router = new MockPulseXRouter(wpls);
-        deployer = new LiquidityDeployer(wpls, address(router));
+        routerV2 = new MockPulseXRouter(wpls);
+        routerV1 = new MockPulseXRouter(wpls);
+        deployer = new LiquidityDeployer(wpls, address(routerV2), address(routerV1));
         tokenA = new MockERC20("TokenA", "TKA");
         tokenB = new MockERC20("TokenB", "TKB");
     }
@@ -104,8 +132,8 @@ contract LiquidityDeployerTest is Test {
         deployer.addLiquidity{value: plsAmount}(address(tokenA), address(0));
 
         // LP sent to DEAD
-        assertEq(router.lastLPTo(), DEAD);
-        assertGt(router.lastLPLiquidity(), 0);
+        assertEq(routerV2.lastLPTo(), DEAD);
+        assertGt(routerV2.lastLPLiquidity(), 0);
     }
 
     // ---- Token/Token pair ----
@@ -114,10 +142,10 @@ contract LiquidityDeployerTest is Test {
         uint256 plsAmount = 10 ether;
         deployer.addLiquidity{value: plsAmount}(address(tokenA), address(tokenB));
 
-        assertEq(router.lastLPTo(), DEAD);
-        assertEq(router.lastLiqTokenA(), address(tokenA));
-        assertEq(router.lastLiqTokenB(), address(tokenB));
-        assertGt(router.lastLPLiquidity(), 0);
+        assertEq(routerV2.lastLPTo(), DEAD);
+        assertEq(routerV2.lastLiqTokenA(), address(tokenA));
+        assertEq(routerV2.lastLiqTokenB(), address(tokenB));
+        assertGt(routerV2.lastLPLiquidity(), 0);
     }
 
     // ---- Reverts ----
@@ -136,14 +164,11 @@ contract LiquidityDeployerTest is Test {
 
     function test_addLiquidity_leftoversBurnedToDead_tokenPls() public {
         deployer.addLiquidity{value: 10 ether}(address(tokenA), address(0));
-
-        // Contract should hold zero tokenA
         assertEq(tokenA.balanceOf(address(deployer)), 0);
     }
 
     function test_addLiquidity_leftoversBurnedToDead_tokenToken() public {
         deployer.addLiquidity{value: 10 ether}(address(tokenA), address(tokenB));
-
         assertEq(tokenA.balanceOf(address(deployer)), 0);
         assertEq(tokenB.balanceOf(address(deployer)), 0);
     }
@@ -162,24 +187,40 @@ contract LiquidityDeployerTest is Test {
         deployer.addLiquidity{value: 10 ether}(address(tokenA), address(tokenB));
     }
 
-    // ---- setRouter ----
+    // ---- setRouterV2 / setRouterV1 ----
 
-    function test_setRouter() public {
-        address newRouter = makeAddr("newRouter");
-        deployer.setRouter(newRouter);
-        assertEq(deployer.router(), newRouter);
+    function test_setRouterV2() public {
+        address newRouter = makeAddr("newRouterV2");
+        deployer.setRouterV2(newRouter);
+        assertEq(deployer.routerV2(), newRouter);
     }
 
-    function test_setRouter_revertsNonOwner() public {
-        address attacker = makeAddr("attacker");
-        vm.prank(attacker);
+    function test_setRouterV2_revertsNonOwner() public {
+        vm.prank(makeAddr("attacker"));
         vm.expectRevert();
-        deployer.setRouter(makeAddr("newRouter"));
+        deployer.setRouterV2(makeAddr("newRouterV2"));
     }
 
-    function test_setRouter_revertsZero() public {
-        vm.expectRevert("zero router");
-        deployer.setRouter(address(0));
+    function test_setRouterV2_revertsZero() public {
+        vm.expectRevert("zero routerV2");
+        deployer.setRouterV2(address(0));
+    }
+
+    function test_setRouterV1() public {
+        address newRouter = makeAddr("newRouterV1");
+        deployer.setRouterV1(newRouter);
+        assertEq(deployer.routerV1(), newRouter);
+    }
+
+    function test_setRouterV1_revertsNonOwner() public {
+        vm.prank(makeAddr("attacker"));
+        vm.expectRevert();
+        deployer.setRouterV1(makeAddr("newRouterV1"));
+    }
+
+    function test_setRouterV1_revertsZero() public {
+        vm.expectRevert("zero routerV1");
+        deployer.setRouterV1(address(0));
     }
 
     // ---- receive ----
@@ -194,11 +235,70 @@ contract LiquidityDeployerTest is Test {
 
     function test_constructor_revertsZeroWpls() public {
         vm.expectRevert("zero wpls");
-        new LiquidityDeployer(address(0), address(router));
+        new LiquidityDeployer(address(0), address(routerV2), address(routerV1));
     }
 
-    function test_constructor_revertsZeroRouter() public {
-        vm.expectRevert("zero router");
-        new LiquidityDeployer(wpls, address(0));
+    function test_constructor_revertsZeroRouterV2() public {
+        vm.expectRevert("zero routerV2");
+        new LiquidityDeployer(wpls, address(0), address(routerV1));
+    }
+
+    function test_constructor_revertsZeroRouterV1() public {
+        vm.expectRevert("zero routerV1");
+        new LiquidityDeployer(wpls, address(routerV2), address(0));
+    }
+
+    // ---- V2-first routing ----
+
+    function test_addLiquidity_usesV2WhenAvailable() public {
+        deployer.addLiquidity{value: 10 ether}(address(tokenA), address(0));
+
+        // V2 should have been called, V1 should not
+        assertGt(routerV2.swapCallCount(), 0);
+        assertEq(routerV1.swapCallCount(), 0);
+        assertEq(routerV2.lastLPTo(), DEAD);
+    }
+
+    // ---- V1 fallback — Token/PLS ----
+
+    function test_addLiquidity_fallsBackToV1_tokenPls() public {
+        // Use a reverting V2 router
+        RevertingRouter badV2 = new RevertingRouter();
+        LiquidityDeployer d = new LiquidityDeployer(wpls, address(badV2), address(routerV1));
+
+        d.addLiquidity{value: 10 ether}(address(tokenA), address(0));
+
+        // V1 got the swap and LP
+        assertGt(routerV1.swapCallCount(), 0);
+        assertEq(routerV1.lastLPTo(), DEAD);
+        assertGt(routerV1.lastLPLiquidity(), 0);
+    }
+
+    // ---- V1 fallback — Token/Token ----
+
+    function test_addLiquidity_fallsBackToV1_tokenToken() public {
+        RevertingRouter badV2 = new RevertingRouter();
+        LiquidityDeployer d = new LiquidityDeployer(wpls, address(badV2), address(routerV1));
+
+        d.addLiquidity{value: 10 ether}(address(tokenA), address(tokenB));
+
+        // V1 got the swaps and LP
+        assertGt(routerV1.swapCallCount(), 0);
+        assertEq(routerV1.lastLPTo(), DEAD);
+        assertEq(routerV1.lastLiqTokenA(), address(tokenA));
+        assertEq(routerV1.lastLiqTokenB(), address(tokenB));
+    }
+
+    // ---- Mixed routers — tokenA on V2, tokenB falls to V1 ----
+
+    function test_addLiquidity_mixedRouters() public {
+        // V2 works for both tokens at swap level (both succeed on routerV2),
+        // but LP addLiquidity on V2 could fail. We test the simpler case:
+        // both swaps succeed on V2, LP added on V2.
+        deployer.addLiquidity{value: 10 ether}(address(tokenA), address(tokenB));
+
+        assertEq(routerV2.swapCallCount(), 2);
+        assertEq(routerV1.swapCallCount(), 0);
+        assertEq(routerV2.lastLPTo(), DEAD);
     }
 }

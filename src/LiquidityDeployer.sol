@@ -11,13 +11,15 @@ import "./interfaces/IPulseXRouter.sol";
 /// @notice Standalone contract for DAO-governed LP creation on PulseX.
 ///         The DAO sends PLS via a Custom proposal; this contract swaps for
 ///         tokens and adds liquidity. LP tokens are burned to DEAD.
+///         Uses PulseX V2 as primary router with V1 fallback (e.g. for OMEGA).
 contract LiquidityDeployer is Ownable, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
     address public constant DEAD = 0x000000000000000000000000000000000000dEaD;
 
     address public immutable wpls;
-    address public router;
+    address public routerV2; // primary — PulseX V2
+    address public routerV1; // fallback — PulseX V1
 
     event LiquidityAdded(
         address indexed tokenA,
@@ -25,13 +27,16 @@ contract LiquidityDeployer is Ownable, ReentrancyGuard {
         uint256 liquidity,
         uint256 plsSpent
     );
-    event RouterUpdated(address indexed oldRouter, address indexed newRouter);
+    event RouterV2Updated(address indexed oldRouter, address indexed newRouter);
+    event RouterV1Updated(address indexed oldRouter, address indexed newRouter);
 
-    constructor(address _wpls, address _router) Ownable(msg.sender) {
+    constructor(address _wpls, address _routerV2, address _routerV1) Ownable(msg.sender) {
         require(_wpls != address(0), "zero wpls");
-        require(_router != address(0), "zero router");
+        require(_routerV2 != address(0), "zero routerV2");
+        require(_routerV1 != address(0), "zero routerV1");
         wpls = _wpls;
-        router = _router;
+        routerV2 = _routerV2;
+        routerV1 = _routerV1;
     }
 
     /// @notice Swap PLS for token(s) and add liquidity on PulseX. LP burned to DEAD.
@@ -51,10 +56,16 @@ contract LiquidityDeployer is Ownable, ReentrancyGuard {
         }
     }
 
-    function setRouter(address _router) external onlyOwner {
-        require(_router != address(0), "zero router");
-        emit RouterUpdated(router, _router);
-        router = _router;
+    function setRouterV2(address _router) external onlyOwner {
+        require(_router != address(0), "zero routerV2");
+        emit RouterV2Updated(routerV2, _router);
+        routerV2 = _router;
+    }
+
+    function setRouterV1(address _router) external onlyOwner {
+        require(_router != address(0), "zero routerV1");
+        emit RouterV1Updated(routerV1, _router);
+        routerV1 = _router;
     }
 
     receive() external payable {}
@@ -63,33 +74,89 @@ contract LiquidityDeployer is Ownable, ReentrancyGuard {
     //  Internal
     // ---------------------------------------------------------------
 
-    function _addLiquidityTokenPls(address tokenA, uint256 half, uint256 otherHalf) internal {
-        address _router = router;
-
-        // Swap half PLS -> tokenA
+    /// @dev Swap PLS for a token. Tries V2 first; falls back to V1 on revert.
+    function _swapPLSForToken(address token, uint256 amount) internal {
         address[] memory path = new address[](2);
         path[0] = wpls;
-        path[1] = tokenA;
-        IPulseXRouter(_router).swapExactETHForTokensSupportingFeeOnTransferTokens{value: half}(
+        path[1] = token;
+
+        try IPulseXRouter(routerV2).swapExactETHForTokensSupportingFeeOnTransferTokens{value: amount}(
             0, path, address(this), block.timestamp
-        );
+        ) {
+            // V2 succeeded
+        } catch {
+            // V2 failed — use V1
+            IPulseXRouter(routerV1).swapExactETHForTokensSupportingFeeOnTransferTokens{value: amount}(
+                0, path, address(this), block.timestamp
+            );
+        }
+    }
+
+    /// @dev Add tokenA/ETH liquidity. Tries V2 first; falls back to V1 on revert.
+    function _addLiquidityETHTryBoth(
+        address token,
+        uint256 tokenBal,
+        uint256 ethVal
+    ) internal returns (uint256 liquidity) {
+        // Try V2 first
+        IERC20(token).approve(routerV2, tokenBal);
+        try IPulseXRouter(routerV2).addLiquidityETH{value: ethVal}(
+            token, tokenBal, 0, 0, DEAD, block.timestamp
+        ) returns (uint256, uint256, uint256 liq) {
+            liquidity = liq;
+            IERC20(token).approve(routerV2, 0);
+        } catch {
+            // Revoke V2 approval, approve V1
+            IERC20(token).approve(routerV2, 0);
+            IERC20(token).approve(routerV1, tokenBal);
+            (,, liquidity) = IPulseXRouter(routerV1).addLiquidityETH{value: ethVal}(
+                token, tokenBal, 0, 0, DEAD, block.timestamp
+            );
+            IERC20(token).approve(routerV1, 0);
+        }
+    }
+
+    /// @dev Add tokenA/tokenB liquidity. Tries V2 first; falls back to V1 on revert.
+    function _addLiquidityTryBoth(
+        address tokenA,
+        address tokenB,
+        uint256 balA,
+        uint256 balB
+    ) internal returns (uint256 liquidity) {
+        // Try V2 first
+        IERC20(tokenA).approve(routerV2, balA);
+        IERC20(tokenB).approve(routerV2, balB);
+        try IPulseXRouter(routerV2).addLiquidity(
+            tokenA, tokenB, balA, balB, 0, 0, DEAD, block.timestamp
+        ) returns (uint256, uint256, uint256 liq) {
+            liquidity = liq;
+            IERC20(tokenA).approve(routerV2, 0);
+            IERC20(tokenB).approve(routerV2, 0);
+        } catch {
+            // Revoke V2, approve V1
+            IERC20(tokenA).approve(routerV2, 0);
+            IERC20(tokenB).approve(routerV2, 0);
+            IERC20(tokenA).approve(routerV1, balA);
+            IERC20(tokenB).approve(routerV1, balB);
+            (,, liquidity) = IPulseXRouter(routerV1).addLiquidity(
+                tokenA, tokenB, balA, balB, 0, 0, DEAD, block.timestamp
+            );
+            IERC20(tokenA).approve(routerV1, 0);
+            IERC20(tokenB).approve(routerV1, 0);
+        }
+    }
+
+    function _addLiquidityTokenPls(address tokenA, uint256 half, uint256 otherHalf) internal {
+        _swapPLSForToken(tokenA, half);
 
         uint256 tokenBal = IERC20(tokenA).balanceOf(address(this));
-        IERC20(tokenA).approve(_router, tokenBal);
-
-        // Add liquidity — LP tokens to DEAD
-        (,, uint256 liquidity) = IPulseXRouter(_router).addLiquidityETH{value: otherHalf}(
-            tokenA, tokenBal, 0, 0, DEAD, block.timestamp
-        );
+        uint256 liquidity = _addLiquidityETHTryBoth(tokenA, tokenBal, otherHalf);
 
         // Burn leftover tokens
         uint256 leftover = IERC20(tokenA).balanceOf(address(this));
         if (leftover > 0) {
             IERC20(tokenA).safeTransfer(DEAD, leftover);
         }
-
-        // Revoke approval
-        IERC20(tokenA).approve(_router, 0);
 
         emit LiquidityAdded(tokenA, address(0), liquidity, half + otherHalf);
     }
@@ -100,43 +167,18 @@ contract LiquidityDeployer is Ownable, ReentrancyGuard {
         uint256 half,
         uint256 otherHalf
     ) internal {
-        address _router = router;
-
-        // Swap half PLS -> tokenA
-        address[] memory pathA = new address[](2);
-        pathA[0] = wpls;
-        pathA[1] = tokenA;
-        IPulseXRouter(_router).swapExactETHForTokensSupportingFeeOnTransferTokens{value: half}(
-            0, pathA, address(this), block.timestamp
-        );
-
-        // Swap other half PLS -> tokenB
-        address[] memory pathB = new address[](2);
-        pathB[0] = wpls;
-        pathB[1] = tokenB;
-        IPulseXRouter(_router).swapExactETHForTokensSupportingFeeOnTransferTokens{value: otherHalf}(
-            0, pathB, address(this), block.timestamp
-        );
+        _swapPLSForToken(tokenA, half);
+        _swapPLSForToken(tokenB, otherHalf);
 
         uint256 balA = IERC20(tokenA).balanceOf(address(this));
         uint256 balB = IERC20(tokenB).balanceOf(address(this));
-        IERC20(tokenA).approve(_router, balA);
-        IERC20(tokenB).approve(_router, balB);
-
-        // Add liquidity — LP tokens to DEAD
-        (,, uint256 liquidity) = IPulseXRouter(_router).addLiquidity(
-            tokenA, tokenB, balA, balB, 0, 0, DEAD, block.timestamp
-        );
+        uint256 liquidity = _addLiquidityTryBoth(tokenA, tokenB, balA, balB);
 
         // Burn leftovers
         uint256 leftA = IERC20(tokenA).balanceOf(address(this));
         if (leftA > 0) IERC20(tokenA).safeTransfer(DEAD, leftA);
         uint256 leftB = IERC20(tokenB).balanceOf(address(this));
         if (leftB > 0) IERC20(tokenB).safeTransfer(DEAD, leftB);
-
-        // Revoke approvals
-        IERC20(tokenA).approve(_router, 0);
-        IERC20(tokenB).approve(_router, 0);
 
         emit LiquidityAdded(tokenA, tokenB, liquidity, half + otherHalf);
     }
