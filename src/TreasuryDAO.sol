@@ -7,16 +7,7 @@ import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "./interfaces/IStakingVault.sol";
 import "./interfaces/ITreasuryDAO.sol";
-
-/// @dev Minimal interface for WPLS wrap/unwrap
-interface IWPLS {
-    function deposit() external payable;
-    function withdraw(uint256 amount) external;
-    function balanceOf(address account) external view returns (uint256);
-    function approve(address spender, uint256 amount) external returns (bool);
-    function transfer(address to, uint256 amount) external returns (bool);
-    function transferFrom(address from, address to, uint256 amount) external returns (bool);
-}
+import "./interfaces/IWPLS.sol";
 
 /// @title TreasuryDAO
 /// @notice PTGC-style DAO for PulseChain. Treasury receives 1% tax from the token;
@@ -29,7 +20,7 @@ contract TreasuryDAO is ITreasuryDAO, Ownable, ReentrancyGuard {
     // ---------------------------------------------------------------
 
     IStakingVault public stakingVault;
-    address public wpls;
+    address public immutable wpls;
     address public token;
     address public dexRouter;
 
@@ -47,6 +38,9 @@ contract TreasuryDAO is ITreasuryDAO, Ownable, ReentrancyGuard {
     mapping(uint256 => Proposal) internal _proposals;
     mapping(uint256 => mapping(address => Receipt)) internal _receipts;
 
+    /// @notice IDs of proposals that are still active or awaiting unlock.
+    uint256[] internal _activeProposalIds;
+
     // ---------------------------------------------------------------
     //  Constructor
     // ---------------------------------------------------------------
@@ -58,7 +52,6 @@ contract TreasuryDAO is ITreasuryDAO, Ownable, ReentrancyGuard {
         address _dexRouter
     ) Ownable(msg.sender) {
         require(_stakingVault != address(0), "zero vault");
-        require(_token != address(0), "zero token");
         require(_wpls != address(0), "zero wpls");
         require(_dexRouter != address(0), "zero router");
 
@@ -110,6 +103,9 @@ contract TreasuryDAO is ITreasuryDAO, Ownable, ReentrancyGuard {
         require(target != address(0), "target required");
         require(bytes(description).length > 0, "empty description");
 
+        // Auto-unlock any defeated/executed proposals to free locked funds
+        _cleanupStaleProposals();
+
         // Ensure treasury can cover the proposal
         require(amount <= availableBalance(), "insufficient available balance");
 
@@ -133,6 +129,8 @@ contract TreasuryDAO is ITreasuryDAO, Ownable, ReentrancyGuard {
             executed: false
         });
 
+        _activeProposalIds.push(id);
+
         emit ProposalCreated(id, msg.sender, amount, target, description, start, end);
         return id;
     }
@@ -147,8 +145,13 @@ contract TreasuryDAO is ITreasuryDAO, Ownable, ReentrancyGuard {
         Receipt storage receipt = _receipts[proposalId][msg.sender];
         require(!receipt.hasVoted, "already voted");
 
-        uint256 weight = stakingVault.stakedBalance(msg.sender);
+        uint256 weight = stakingVault.effectiveBalance(msg.sender);
         require(weight > 0, "no voting power");
+        require(
+            stakingVault.stakeTimestamp(msg.sender) != 0 &&
+            stakingVault.stakeTimestamp(msg.sender) < block.timestamp,
+            "must stake at least 1 block before voting"
+        );
 
         receipt.hasVoted = true;
         receipt.support = support;
@@ -184,7 +187,7 @@ contract TreasuryDAO is ITreasuryDAO, Ownable, ReentrancyGuard {
     }
 
     /// @notice Unlock funds for a defeated proposal. Anyone may call.
-    function unlockDefeated(uint256 proposalId) external {
+    function unlockDefeated(uint256 proposalId) public {
         require(proposalId < proposalCount, "invalid proposal");
         require(state(proposalId) == ProposalState.Defeated, "not defeated");
 
@@ -196,6 +199,47 @@ contract TreasuryDAO is ITreasuryDAO, Ownable, ReentrancyGuard {
         lockedAmount -= p.amount;
         emit FundsUnlocked(proposalId, p.amount);
         emit ProposalDefeated(proposalId);
+    }
+
+    /// @notice Batch-unlock defeated proposals to free locked treasury funds.
+    function unlockDefeatedBatch(uint256[] calldata proposalIds) external {
+        for (uint256 i; i < proposalIds.length;) {
+            unlockDefeated(proposalIds[i]);
+            unchecked { ++i; }
+        }
+    }
+
+    /// @dev Sweep _activeProposalIds: unlock defeated, remove executed/unlocked.
+    function _cleanupStaleProposals() internal {
+        uint256 len = _activeProposalIds.length;
+        uint256 i;
+        while (i < len) {
+            uint256 pid = _activeProposalIds[i];
+            Proposal storage p = _proposals[pid];
+
+            if (p.executed) {
+                // Already executed or unlocked — just remove from tracking
+                _activeProposalIds[i] = _activeProposalIds[len - 1];
+                _activeProposalIds.pop();
+                len--;
+                continue;
+            }
+
+            ProposalState s = state(pid);
+            if (s == ProposalState.Defeated) {
+                // Auto-unlock defeated proposal
+                p.executed = true;
+                lockedAmount -= p.amount;
+                emit FundsUnlocked(pid, p.amount);
+                emit ProposalDefeated(pid);
+                _activeProposalIds[i] = _activeProposalIds[len - 1];
+                _activeProposalIds.pop();
+                len--;
+                continue;
+            }
+
+            i++;
+        }
     }
 
     // ---------------------------------------------------------------
@@ -246,7 +290,7 @@ contract TreasuryDAO is ITreasuryDAO, Ownable, ReentrancyGuard {
 
     function _meetsQuorum(Proposal storage p) internal view returns (bool) {
         uint256 totalVotes = p.yesVotes + p.noVotes;
-        uint256 staked = stakingVault.totalStaked();
+        uint256 staked = stakingVault.totalEffectiveStaked();
         if (staked == 0) return false;
         return totalVotes * BPS_DENOMINATOR >= quorumBps * staked;
     }
@@ -277,12 +321,6 @@ contract TreasuryDAO is ITreasuryDAO, Ownable, ReentrancyGuard {
         require(router != address(0), "zero address");
         emit DexRouterUpdated(dexRouter, router);
         dexRouter = router;
-    }
-
-    function setWpls(address _wpls) external override onlyOwner {
-        require(_wpls != address(0), "zero address");
-        emit WplsAddressUpdated(wpls, _wpls);
-        wpls = _wpls;
     }
 
     function setToken(address _token) external override onlyOwner {

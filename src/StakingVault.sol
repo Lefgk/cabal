@@ -15,21 +15,24 @@ interface IPulseXRouter {
         uint256 deadline
     ) external payable;
 
-    function WPLS() external pure returns (address);
+    function swapExactTokensForTokensSupportingFeeOnTransferTokens(
+        uint256 amountIn,
+        uint256 amountOutMin,
+        address[] calldata path,
+        address to,
+        uint256 deadline
+    ) external;
+
 }
 
-/// @dev Minimal interface for unwrapping WPLS that arrives from tax distributions
-///      when the factory transfers WPLS (not raw PLS) to the vault.
-interface IWPLS {
-    function balanceOf(address) external view returns (uint256);
-    function withdraw(uint256) external;
-}
+import {IWPLS} from "./interfaces/IWPLS.sol";
 
 /// @title StakingVault
-/// @notice Synthetix StakingRewards-style vault with 7-day linear reward drip.
-///         Stake an ERC-20 token, earn yield in a different reward token that
-///         is released gradually over `rewardsDuration`. Tracks top N stakers
-///         for DAO proposal eligibility.
+/// @notice Weighted multi-position staking vault with flex + lock tiers.
+///         Uses a single Synthetix rewardPerToken accumulator weighted by
+///         effective supply (amount * multiplier / BPS). Flex stake = 1x weight
+///         with 1% withdraw fee burned. Lock positions earn higher multipliers with
+///         30% early-unlock penalty (59% burn / 30% HEX yield / 10% DAO as WPLS / 1% dev as WPLS).
 contract StakingVault is IStakingVault, Ownable, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
@@ -37,11 +40,32 @@ contract StakingVault is IStakingVault, Ownable, ReentrancyGuard {
     // Immutables
     // -------------------------------------------------------------------------
 
-    IERC20 public immutable STAKING_TOKEN;
+    IERC20 public STAKING_TOKEN;
     IERC20 public immutable REWARDS_TOKEN;
 
     // -------------------------------------------------------------------------
-    // Reward state (Synthetix pattern)
+    // Constants
+    // -------------------------------------------------------------------------
+
+    uint256 public constant BPS = 10_000;
+    /// @dev Precision multiplier for rewardPerToken accumulator.
+    ///      Must be large enough to avoid truncation when reward token has
+    ///      fewer decimals than staking token (e.g. pHEX 8 dec vs TSTT 18 dec).
+    uint256 internal constant PRECISION = 1e30;
+    uint256 public constant MAX_LOCKS_PER_USER = 50;
+    uint256 public constant MAX_TOP_STAKER_COUNT = 100;
+    uint256 public constant FLEX_WITHDRAW_FEE_BPS = 100;       // 1%
+    uint256 public constant EARLY_UNLOCK_PENALTY_BPS = 3000;   // 30%
+    // Penalty split (must sum to 100)
+    uint256 public constant PENALTY_STAKER_PCT = 30;
+    uint256 public constant PENALTY_BURN_PCT = 59;
+    uint256 public constant PENALTY_DAO_PCT = 10;
+    uint256 public constant PENALTY_DEV_PCT = 1;
+    address public constant DEAD = 0x000000000000000000000000000000000000dEaD;
+    address public constant WPLS = 0xA1077a294dDE1B09bB078844df40758a5D0f9a27;
+
+    // -------------------------------------------------------------------------
+    // Reward state (Synthetix pattern — weighted)
     // -------------------------------------------------------------------------
 
     uint256 public rewardsDuration = 7 days;
@@ -53,24 +77,32 @@ contract StakingVault is IStakingVault, Ownable, ReentrancyGuard {
     mapping(address => uint256) public userRewardPerTokenPaid;
     mapping(address => uint256) public rewards;
 
-    /// @notice Running sum of rewards that have been dripped into the accumulator
-    ///         but not yet paid out. Invariant:
-    ///         totalOwed ==
-    ///           sum_i(rewards[i])  // materialized-but-unclaimed
-    ///         + sum_i(balance_i * (rewardPerTokenStored - userRewardPerTokenPaid_i) / 1e18)
-    ///                              // accrued-but-unmaterialized
-    ///         It excludes the future (undripped) portion of the current period,
-    ///         which equals `(periodFinish - now) * rewardRate`.
-    ///         Needed so `processRewards()` can tell genuinely-new reward tokens
-    ///         apart from already-committed ones sitting in the vault balance.
+    /// @notice Running sum of rewards dripped into the accumulator but not yet paid out.
     uint256 public totalOwed;
 
     // -------------------------------------------------------------------------
-    // Staking state
+    // Staking state — weighted
     // -------------------------------------------------------------------------
 
-    uint256 private _totalSupply;
-    mapping(address => uint256) private _balances;
+    /// @notice Actual tokens deposited (flex + all locks). Used for solvency checks.
+    uint256 private _totalRawSupply;
+    /// @notice Sum of all weighted balances: sum(amount * multiplier / BPS).
+    uint256 private _totalEffectiveSupply;
+
+    /// @notice Flex (unlocked) balance per user — 1x multiplier.
+    mapping(address => uint256) private _flexBalance;
+    /// @notice Per-user lock array.
+    mapping(address => LockPosition[]) private _locks;
+    /// @notice Cached effective weight per user (flex + all locks).
+    mapping(address => uint256) private _userEffectiveBalance;
+    /// @notice Cached raw staked balance per user (flex + all lock amounts).
+    mapping(address => uint256) private _userRawBalance;
+
+    /// @notice Staking tokens from early-unlock penalties awaiting swap to reward token.
+    uint256 public pendingPenaltyTokens;
+
+    /// @notice Minimum PLS/token amount to trigger an auto-swap (skip dust).
+    uint256 public minSwapThreshold = 1e18;
 
     // -------------------------------------------------------------------------
     // Unique staker tracking
@@ -79,7 +111,7 @@ contract StakingVault is IStakingVault, Ownable, ReentrancyGuard {
     uint256 public totalStakers;
 
     // -------------------------------------------------------------------------
-    // Top staker tracking (sorted descending by staked amount)
+    // Top staker tracking (sorted descending by effective balance)
     // -------------------------------------------------------------------------
 
     uint256 public topStakerCount;
@@ -87,22 +119,27 @@ contract StakingVault is IStakingVault, Ownable, ReentrancyGuard {
     mapping(address => bool) internal _isTopStaker;
 
     // -------------------------------------------------------------------------
-    // DEX (for topUp swap)
+    // DEX (for topUp swap + penalty swap)
     // -------------------------------------------------------------------------
 
     IPulseXRouter public dexRouter;
 
     // -------------------------------------------------------------------------
-    // DAO
+    // DAO + Dev
     // -------------------------------------------------------------------------
 
     address public daoAddress;
+    address public devWallet;
 
     // -------------------------------------------------------------------------
     // Vote lock
     // -------------------------------------------------------------------------
 
     mapping(address => uint256) public voteLockEnd;
+    uint256 public constant MAX_VOTE_LOCK_DURATION = 30 days;
+
+    /// @notice Timestamp when user first staked (reset on full exit).
+    mapping(address => uint256) public stakeTimestamp;
 
     // -------------------------------------------------------------------------
     // Pause
@@ -119,13 +156,6 @@ contract StakingVault is IStakingVault, Ownable, ReentrancyGuard {
         _;
     }
 
-    /// @notice Runs before `updateReward` in user-facing entry points so that
-    ///         any tax tokens the factory has dropped into the vault since the
-    ///         last touch are folded into the drip before per-account math.
-    ///         This is the self-healing equivalent of ZKP's
-    ///         `stakingContract.topUp{value: pls}()` callback — since our v3
-    ///         factory token can't call back into the vault, every stake /
-    ///         withdraw / getReward picks up new taxes on behalf of stakers.
     modifier autoProcess() {
         _processRewardsIfNew();
         _;
@@ -133,17 +163,13 @@ contract StakingVault is IStakingVault, Ownable, ReentrancyGuard {
 
     modifier updateReward(address account) {
         uint256 newRPT = rewardPerToken();
-        // When supply is zero, rewardPerToken() returns stored unchanged so the
-        // delta is zero; the drip during a zero-supply window is effectively
-        // held aside and re-enters via processRewards later.
-        if (newRPT > rewardPerTokenStored && _totalSupply > 0) {
-            totalOwed += ((newRPT - rewardPerTokenStored) * _totalSupply) / 1e18;
+        if (newRPT > rewardPerTokenStored && _totalEffectiveSupply > 0) {
+            totalOwed += ((newRPT - rewardPerTokenStored) * _totalEffectiveSupply) / PRECISION;
         }
         rewardPerTokenStored = newRPT;
         lastUpdateTime = lastTimeRewardApplicable();
         if (account != address(0)) {
-            rewards[account] = earned(account);
-            userRewardPerTokenPaid[account] = rewardPerTokenStored;
+            _materializeRewards(account);
         }
         _;
     }
@@ -158,25 +184,43 @@ contract StakingVault is IStakingVault, Ownable, ReentrancyGuard {
         address _owner,
         uint256 _topCount
     ) Ownable(_owner) {
-        require(_stakingToken != address(0), "StakingVault: zero staking token");
         require(_rewardsToken != address(0), "StakingVault: zero rewards token");
-        require(_topCount > 0, "StakingVault: zero top count");
+        require(_topCount > 0 && _topCount <= MAX_TOP_STAKER_COUNT, "StakingVault: invalid top count");
 
-        STAKING_TOKEN = IERC20(_stakingToken);
+        if (_stakingToken != address(0)) {
+            STAKING_TOKEN = IERC20(_stakingToken);
+        }
         REWARDS_TOKEN = IERC20(_rewardsToken);
         topStakerCount = _topCount;
     }
 
     // -------------------------------------------------------------------------
-    // Views — Synthetix reward math
+    // Views — Synthetix reward math (weighted)
     // -------------------------------------------------------------------------
 
     function totalStaked() external view returns (uint256) {
-        return _totalSupply;
+        return _totalRawSupply;
     }
 
+    function totalRawStaked() external view returns (uint256) {
+        return _totalRawSupply;
+    }
+
+    function totalEffectiveStaked() external view returns (uint256) {
+        return _totalEffectiveSupply;
+    }
+
+    /// @notice Returns the user's total raw staked balance (flex + all lock amounts).
     function stakedBalance(address account) external view returns (uint256) {
-        return _balances[account];
+        return _userRawBalance[account];
+    }
+
+    function flexBalance(address account) external view returns (uint256) {
+        return _flexBalance[account];
+    }
+
+    function effectiveBalance(address account) external view returns (uint256) {
+        return _userEffectiveBalance[account];
     }
 
     function lastTimeRewardApplicable() public view returns (uint256) {
@@ -184,20 +228,30 @@ contract StakingVault is IStakingVault, Ownable, ReentrancyGuard {
     }
 
     function rewardPerToken() public view returns (uint256) {
-        if (_totalSupply == 0) {
+        if (_totalEffectiveSupply == 0) {
             return rewardPerTokenStored;
         }
         return
             rewardPerTokenStored +
-            ((lastTimeRewardApplicable() - lastUpdateTime) * rewardRate * 1e18) /
-            _totalSupply;
+            ((lastTimeRewardApplicable() - lastUpdateTime) * rewardRate * PRECISION) /
+            _totalEffectiveSupply;
     }
 
     function earned(address account) public view returns (uint256) {
-        return
-            (_balances[account] * (rewardPerToken() - userRewardPerTokenPaid[account])) /
-            1e18 +
-            rewards[account];
+        uint256 currentRPT = rewardPerToken();
+        // Flex earnings
+        uint256 flexEff = _flexBalance[account]; // 1x = amount itself
+        uint256 total = (flexEff * (currentRPT - userRewardPerTokenPaid[account])) / PRECISION;
+        total += rewards[account];
+        // Lock earnings
+        LockPosition[] storage locks = _locks[account];
+        for (uint256 i; i < locks.length;) {
+            uint256 lockEff = (locks[i].amount * locks[i].multiplier) / BPS;
+            total += (lockEff * (currentRPT - locks[i].rewardPerTokenPaid)) / PRECISION;
+            total += locks[i].pendingRewards;
+            unchecked { ++i; }
+        }
+        return total;
     }
 
     function getRewardForDuration() external view returns (uint256) {
@@ -205,18 +259,65 @@ contract StakingVault is IStakingVault, Ownable, ReentrancyGuard {
     }
 
     // -------------------------------------------------------------------------
-    // Core staking
+    // Lock views
+    // -------------------------------------------------------------------------
+
+    function lockCount(address user) external view returns (uint256) {
+        return _locks[user].length;
+    }
+
+    function getLock(address user, uint256 lockId) external view returns (LockPosition memory) {
+        require(lockId < _locks[user].length, "StakingVault: invalid lock id");
+        return _locks[user][lockId];
+    }
+
+    function getUserLocks(address user) external view returns (LockPosition[] memory) {
+        return _locks[user];
+    }
+
+    function pendingRewardForLock(address user, uint256 lockId) external view returns (uint256) {
+        require(lockId < _locks[user].length, "StakingVault: invalid lock id");
+        LockPosition storage lk = _locks[user][lockId];
+        uint256 currentRPT = rewardPerToken();
+        uint256 lockEff = (lk.amount * lk.multiplier) / BPS;
+        return (lockEff * (currentRPT - lk.rewardPerTokenPaid)) / PRECISION + lk.pendingRewards;
+    }
+
+    function getMultiplierForDuration(uint256 duration) public pure returns (uint256) {
+        return _getMultiplier(duration);
+    }
+
+    function getLockTiers() external pure returns (uint256[] memory durations, uint256[] memory multipliers) {
+        durations = new uint256[](7);
+        multipliers = new uint256[](7);
+        durations[0] = 0;           multipliers[0] = 10000;
+        durations[1] = 90 days;     multipliers[1] = 15000;
+        durations[2] = 180 days;    multipliers[2] = 20000;
+        durations[3] = 365 days;    multipliers[3] = 30000;
+        durations[4] = 730 days;    multipliers[4] = 40000;
+        durations[5] = 1825 days;   multipliers[5] = 60000;
+        durations[6] = 3650 days;   multipliers[6] = 100000;
+    }
+
+    // -------------------------------------------------------------------------
+    // Core staking — Flex (1x weight, 1% withdraw fee)
     // -------------------------------------------------------------------------
 
     function stake(uint256 amount) external nonReentrant notPaused autoProcess updateReward(msg.sender) {
         require(amount > 0, "StakingVault: zero stake");
 
-        if (_balances[msg.sender] == 0) {
+        bool isNew = _flexBalance[msg.sender] == 0 && _locks[msg.sender].length == 0;
+        if (isNew) {
             totalStakers += 1;
+            stakeTimestamp[msg.sender] = block.timestamp;
         }
 
-        _totalSupply += amount;
-        _balances[msg.sender] += amount;
+        _flexBalance[msg.sender] += amount;
+        _totalRawSupply += amount;
+        _userRawBalance[msg.sender] += amount;
+        // Flex = 1x, so effective delta = amount
+        _totalEffectiveSupply += amount;
+        _userEffectiveBalance[msg.sender] += amount;
 
         STAKING_TOKEN.safeTransferFrom(msg.sender, address(this), amount);
 
@@ -228,30 +329,43 @@ contract StakingVault is IStakingVault, Ownable, ReentrancyGuard {
     function withdraw(uint256 amount) public nonReentrant autoProcess updateReward(msg.sender) {
         require(block.timestamp > voteLockEnd[msg.sender], "StakingVault: tokens locked by active vote");
         require(amount > 0, "StakingVault: zero withdraw");
-        require(_balances[msg.sender] >= amount, "StakingVault: insufficient balance");
+        require(_flexBalance[msg.sender] >= amount, "StakingVault: insufficient balance");
 
-        _totalSupply -= amount;
-        _balances[msg.sender] -= amount;
+        _flexBalance[msg.sender] -= amount;
+        _totalRawSupply -= amount;
+        _userRawBalance[msg.sender] -= amount;
+        _totalEffectiveSupply -= amount;
+        _userEffectiveBalance[msg.sender] -= amount;
 
-        STAKING_TOKEN.safeTransfer(msg.sender, amount);
+        // 1% fee → burn (OMEGA sent to dead address)
+        uint256 fee = (amount * FLEX_WITHDRAW_FEE_BPS) / BPS;
+        if (fee > 0) {
+            _burnTokens(fee);
+        }
+        STAKING_TOKEN.safeTransfer(msg.sender, amount - fee);
 
-        if (_balances[msg.sender] == 0) {
+        if (_flexBalance[msg.sender] == 0 && _locks[msg.sender].length == 0) {
             totalStakers -= 1;
+            stakeTimestamp[msg.sender] = 0;
             _removeFromTopStakers(msg.sender);
         } else {
             _updateTopStakers(msg.sender);
         }
 
-        emit Withdrawn(msg.sender, amount);
+        emit Withdrawn(msg.sender, amount, fee);
     }
 
     function getReward() public nonReentrant autoProcess updateReward(msg.sender) {
         uint256 reward = rewards[msg.sender];
+        // Collect pending rewards from all locks
+        LockPosition[] storage locks = _locks[msg.sender];
+        for (uint256 i; i < locks.length;) {
+            reward += locks[i].pendingRewards;
+            locks[i].pendingRewards = 0;
+            unchecked { ++i; }
+        }
         if (reward > 0) {
             rewards[msg.sender] = 0;
-            // Round-down dust in totalOwed accounting could otherwise underflow
-            // if a single user's payout briefly exceeds the running total. Cap
-            // at totalOwed for safety; the dust is bounded by O(num_stakers).
             if (reward > totalOwed) {
                 totalOwed = 0;
             } else {
@@ -263,18 +377,268 @@ contract StakingVault is IStakingVault, Ownable, ReentrancyGuard {
     }
 
     function exit() external {
-        withdraw(_balances[msg.sender]);
+        withdraw(_flexBalance[msg.sender]);
         getReward();
+    }
+
+    // -------------------------------------------------------------------------
+    // Lock staking — Create time-locked positions
+    // -------------------------------------------------------------------------
+
+    function stakeLocked(uint256 amount, uint256 duration) external nonReentrant notPaused autoProcess updateReward(msg.sender) {
+        require(amount > 0, "StakingVault: zero stake");
+        uint256 multiplier = _getMultiplier(duration);
+        require(multiplier > BPS, "StakingVault: use stake() for flex");
+        require(_locks[msg.sender].length < MAX_LOCKS_PER_USER, "StakingVault: too many locks");
+
+        bool isNew = _flexBalance[msg.sender] == 0 && _locks[msg.sender].length == 0;
+        if (isNew) {
+            totalStakers += 1;
+            stakeTimestamp[msg.sender] = block.timestamp;
+        }
+
+        _locks[msg.sender].push(LockPosition({
+            amount: amount,
+            lockTime: block.timestamp,
+            unlockTime: block.timestamp + duration,
+            duration: duration,
+            multiplier: multiplier,
+            rewardPerTokenPaid: rewardPerTokenStored,
+            pendingRewards: 0
+        }));
+
+        uint256 effectiveDelta = (amount * multiplier) / BPS;
+        _totalRawSupply += amount;
+        _userRawBalance[msg.sender] += amount;
+        _totalEffectiveSupply += effectiveDelta;
+        _userEffectiveBalance[msg.sender] += effectiveDelta;
+
+        STAKING_TOKEN.safeTransferFrom(msg.sender, address(this), amount);
+
+        _updateTopStakers(msg.sender);
+
+        uint256 lockId = _locks[msg.sender].length - 1;
+        emit StakedLocked(msg.sender, amount, duration, multiplier, lockId);
+    }
+
+    /// @notice Unlock one or more lock positions. IDs must be in DESCENDING order
+    ///         to avoid index shifting issues during swap-remove.
+    ///         Expired locks return full amount. Early unlock incurs 30% penalty.
+    function unlock(uint256[] calldata lockIds) external nonReentrant autoProcess updateReward(msg.sender) {
+        require(block.timestamp > voteLockEnd[msg.sender], "StakingVault: tokens locked by active vote");
+        require(lockIds.length > 0, "StakingVault: empty array");
+
+        LockPosition[] storage locks = _locks[msg.sender];
+        uint256 totalReturn;
+        uint256 totalPenalty;
+
+        // Validate descending order
+        for (uint256 i = 1; i < lockIds.length;) {
+            require(lockIds[i] < lockIds[i - 1], "StakingVault: ids must be descending");
+            unchecked { ++i; }
+        }
+
+        for (uint256 i; i < lockIds.length;) {
+            uint256 id = lockIds[i];
+            require(id < locks.length, "StakingVault: invalid lock id");
+
+            LockPosition storage lk = locks[id];
+            uint256 amount = lk.amount;
+            uint256 effectiveDelta = (amount * lk.multiplier) / BPS;
+
+            // Collect any pending lock rewards into user rewards
+            rewards[msg.sender] += lk.pendingRewards;
+
+            // Accounting
+            _totalRawSupply -= amount;
+            _userRawBalance[msg.sender] -= amount;
+            _totalEffectiveSupply -= effectiveDelta;
+            _userEffectiveBalance[msg.sender] -= effectiveDelta;
+
+            uint256 penalty;
+            if (block.timestamp >= lk.unlockTime) {
+                // Expired — full return
+                totalReturn += amount;
+            } else {
+                // Early unlock — 30% penalty
+                penalty = (amount * EARLY_UNLOCK_PENALTY_BPS) / BPS;
+                totalReturn += amount - penalty;
+                totalPenalty += penalty;
+            }
+
+            emit Unlocked(msg.sender, id, amount, penalty);
+
+            // Swap-remove: move last element to this index, then pop
+            uint256 lastIdx = locks.length - 1;
+            if (id != lastIdx) {
+                locks[id] = locks[lastIdx];
+            }
+            locks.pop();
+            unchecked { ++i; }
+        }
+
+        // Transfer net amount to user
+        if (totalReturn > 0) {
+            STAKING_TOKEN.safeTransfer(msg.sender, totalReturn);
+        }
+
+        // Distribute penalty
+        if (totalPenalty > 0) {
+            _distributePenalty(totalPenalty);
+        }
+
+        // Update staker tracking
+        if (_flexBalance[msg.sender] == 0 && locks.length == 0) {
+            totalStakers -= 1;
+            stakeTimestamp[msg.sender] = 0;
+            _removeFromTopStakers(msg.sender);
+        } else {
+            _updateTopStakers(msg.sender);
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Penalty distribution
+    // -------------------------------------------------------------------------
+
+    function _distributePenalty(uint256 penalty) internal {
+        uint256 toStakers = (penalty * PENALTY_STAKER_PCT) / 100;
+        uint256 toBurn = (penalty * PENALTY_BURN_PCT) / 100;
+        uint256 toDao = (penalty * PENALTY_DAO_PCT) / 100;
+        uint256 toDev = penalty - toStakers - toBurn - toDao; // remainder = 1%
+
+        // Burn — try burn() first, fall back to dead address
+        if (toBurn > 0) {
+            _burnTokens(toBurn);
+        }
+
+        // DAO — swap OMEGA → WPLS, send WPLS to DAO treasury
+        if (toDao > 0 && daoAddress != address(0)) {
+            _swapAndSend(toDao, daoAddress);
+        }
+
+        // Dev — swap OMEGA → WPLS, send WPLS to dev wallet
+        if (toDev > 0 && devWallet != address(0)) {
+            _swapAndSend(toDev, devWallet);
+        }
+
+        // Staker share (HEX Yield): queue for swap to reward token (pHEX)
+        if (toStakers > 0) {
+            pendingPenaltyTokens += toStakers;
+        }
+
+        emit PenaltyDistributed(penalty, toStakers, toBurn, toDao, toDev);
+    }
+
+    /// @dev Try ERC20 burn(amount); fall back to transfer-to-dead if unsupported.
+    function _burnTokens(uint256 amount) internal {
+        (bool ok, ) = address(STAKING_TOKEN).call(
+            abi.encodeWithSignature("burn(uint256)", amount)
+        );
+        if (!ok) {
+            STAKING_TOKEN.safeTransfer(DEAD, amount);
+        }
+    }
+
+    /// @dev Swap staking tokens (OMEGA) → WPLS via DEX and send to recipient.
+    ///      If no router is set or staking token IS WPLS, sends staking token directly.
+    function _swapAndSend(uint256 amount, address recipient) internal {
+        if (address(dexRouter) == address(0)) {
+            // No router — send staking token directly as fallback
+            STAKING_TOKEN.safeTransfer(recipient, amount);
+            return;
+        }
+
+        // If staking token is already WPLS, just transfer
+        if (address(STAKING_TOKEN) == WPLS) {
+            STAKING_TOKEN.safeTransfer(recipient, amount);
+            return;
+        }
+
+        STAKING_TOKEN.approve(address(dexRouter), amount);
+
+        address[] memory path = new address[](2);
+        path[0] = address(STAKING_TOKEN);
+        path[1] = WPLS;
+
+        uint256 wplsBefore = IWPLS(WPLS).balanceOf(address(this));
+
+        try dexRouter.swapExactTokensForTokensSupportingFeeOnTransferTokens(
+            amount,
+            0, // accept any amount
+            path,
+            address(this),
+            block.timestamp
+        ) {
+            uint256 wplsReceived = IWPLS(WPLS).balanceOf(address(this)) - wplsBefore;
+            if (wplsReceived > 0) {
+                IERC20(WPLS).safeTransfer(recipient, wplsReceived);
+            }
+        } catch {
+            // Revoke dangling approval
+            STAKING_TOKEN.approve(address(dexRouter), 0);
+            // Swap failed — send staking token directly as fallback
+            STAKING_TOKEN.safeTransfer(recipient, amount);
+        }
+    }
+
+    /// @dev Swap queued penalty staking tokens → reward token via PulseX,
+    ///      then inject into the reward drip. Called inside _processRewardsIfNew.
+    function _swapPendingPenaltyTokens() internal {
+        uint256 pending = pendingPenaltyTokens;
+        if (pending == 0 || pending < minSwapThreshold || address(dexRouter) == address(0)) return;
+        if (address(STAKING_TOKEN) == address(REWARDS_TOKEN)) {
+            // Same token — no swap needed, just let processRewards pick it up
+            pendingPenaltyTokens = 0;
+            return;
+        }
+
+        pendingPenaltyTokens = 0;
+
+        // Approve router to spend staking tokens
+        STAKING_TOKEN.approve(address(dexRouter), pending);
+
+        address[] memory path;
+        if (address(STAKING_TOKEN) == WPLS) {
+            path = new address[](2);
+            path[0] = address(STAKING_TOKEN);
+            path[1] = address(REWARDS_TOKEN);
+        } else {
+            path = new address[](3);
+            path[0] = address(STAKING_TOKEN);
+            path[1] = WPLS;
+            path[2] = address(REWARDS_TOKEN);
+        }
+
+        uint256 rewardBefore = REWARDS_TOKEN.balanceOf(address(this));
+
+        try dexRouter.swapExactTokensForTokensSupportingFeeOnTransferTokens(
+            pending,
+            0, // accept any amount
+            path,
+            address(this),
+            block.timestamp
+        ) {
+            uint256 received = REWARDS_TOKEN.balanceOf(address(this)) - rewardBefore;
+            emit PenaltySwapped(pending, received);
+        } catch {
+            // Revoke dangling approval
+            STAKING_TOKEN.approve(address(dexRouter), 0);
+            // Swap failed — re-queue for next attempt
+            pendingPenaltyTokens += pending;
+            emit PenaltySwapFailed(pending);
+            return;
+        }
+
+        // The swapped reward tokens will be picked up by _processRewardsIfNew
+        // on the next call since they now sit in the vault balance.
     }
 
     // -------------------------------------------------------------------------
     // Reward injection — Synthetix notifyRewardAmount
     // -------------------------------------------------------------------------
 
-    /// @notice Called by the token contract (or anyone) when reward tokens are
-    ///         deposited. Starts or extends the reward drip over `rewardsDuration`.
-    ///         Caller must have approved this contract to spend `reward` of REWARDS_TOKEN.
-    function notifyRewardAmount(uint256 reward) external nonReentrant updateReward(address(0)) {
+    function notifyRewardAmount(uint256 reward) external onlyOwner nonReentrant updateReward(address(0)) {
         require(reward > 0, "StakingVault: zero reward");
 
         REWARDS_TOKEN.safeTransferFrom(msg.sender, address(this), reward);
@@ -288,21 +652,18 @@ contract StakingVault is IStakingVault, Ownable, ReentrancyGuard {
     // Top-up — receive PLS, swap to reward token, auto-notify (ZKP pattern)
     // -------------------------------------------------------------------------
 
-    /// @notice Receives PLS, swaps to the reward token via PulseX, and starts
-    ///         (or extends) the reward drip automatically.
     function topUp() public payable nonReentrant updateReward(address(0)) {
         require(msg.value > 0, "StakingVault: zero PLS");
         require(address(dexRouter) != address(0), "StakingVault: no router");
 
         uint256 balBefore = REWARDS_TOKEN.balanceOf(address(this));
 
-        // Swap PLS → WPLS → reward token via PulseX
         address[] memory path = new address[](2);
-        path[0] = dexRouter.WPLS();
+        path[0] = WPLS;
         path[1] = address(REWARDS_TOKEN);
 
         dexRouter.swapExactETHForTokensSupportingFeeOnTransferTokens{value: msg.value}(
-            0, // amountOutMin — accept any amount (MEV protection not critical for reward injection)
+            0,
             path,
             address(this),
             block.timestamp
@@ -318,105 +679,70 @@ contract StakingVault is IStakingVault, Ownable, ReentrancyGuard {
         emit RewardAdded(reward);
     }
 
-    /// @dev Accept PLS silently. We MUST NOT auto-call topUp() from receive()
-    ///      because the token factory's tax distribution routes PLS into the
-    ///      vault mid-transfer (e.g. inside stake()/transferFrom). topUp() is
-    ///      nonReentrant, and stake()/withdraw()/getReward() are nonReentrant,
-    ///      so re-entering topUp() during a stake call would revert with
-    ///      ReentrancyGuardReentrantCall and brick every user action.
-    ///      Instead, accumulated PLS is swapped to REWARDS_TOKEN via
-    ///      `_swapPendingPLSForRewardToken()` inside `_processRewardsIfNew()`,
-    ///      which is invoked by the `autoProcess` modifier on the next
-    ///      stake/withdraw/getReward (or by an explicit processRewards()).
     receive() external payable {}
 
     // -------------------------------------------------------------------------
     // Process rewards — auto-notify when reward tokens are sent directly
     // -------------------------------------------------------------------------
 
-    /// @notice Detects any excess reward tokens in the contract (sent by the
-    ///         token factory tax system) and starts/extends the reward drip.
-    ///         Anyone can call this — it simply processes already-received tokens.
     function processRewards() external nonReentrant {
         uint256 oldPeriodFinish = periodFinish;
         _processRewardsIfNew();
-        // Signal to callers that this was a no-op: useful for keepers /
-        // explicit triggers. User-facing entry points (stake / withdraw /
-        // getReward) use the internal helper directly and never revert.
         require(
             periodFinish > oldPeriodFinish,
             "StakingVault: no new rewards"
         );
     }
 
-    /// @dev Snaps global reward state to `now`, then starts a new reward
-    ///      period if there are uncommitted reward tokens sitting in the
-    ///      vault. Safe to call repeatedly and safe to call when there is
-    ///      nothing to do (no revert on no-op).
-    /// @dev Swap any PLS sitting in the vault (deposited via receive() by
-    ///      factory tax distributions) into REWARDS_TOKEN via the configured
-    ///      router. Also unwraps any WPLS the factory may have transferred
-    ///      directly. Wrapped in try/catch so a broken router/pair never
-    ///      bricks stake/withdraw/getReward.
     function _swapPendingPLSForRewardToken() internal {
         if (address(dexRouter) == address(0)) return;
 
-        // Unwrap any WPLS balance first.
-        address wpls = dexRouter.WPLS();
-        uint256 wplsBal = IWPLS(wpls).balanceOf(address(this));
+        // If rewards ARE WPLS, leave WPLS as-is — don't unwrap
+        if (address(REWARDS_TOKEN) == WPLS) return;
+
+        uint256 wplsBal = IWPLS(WPLS).balanceOf(address(this));
         if (wplsBal > 0) {
-            try IWPLS(wpls).withdraw(wplsBal) {} catch {}
+            try IWPLS(WPLS).withdraw(wplsBal) {} catch {}
         }
 
         uint256 plsBal = address(this).balance;
-        if (plsBal == 0) return;
-
-        // If rewards token is WPLS, no swap needed (already unwrapped above
-        // into PLS which we'll re-wrap below by skipping swap). Handle the
-        // degenerate "reward token is WPLS" case by re-wrapping.
-        if (address(REWARDS_TOKEN) == wpls) {
-            try IWPLS(wpls).withdraw(0) {} catch {} // no-op, just to appease linters
-            // Re-wrap via a direct call: use dexRouter's receive-less path by
-            // swapping PLS→WPLS is equivalent to deposit. Simplest: skip the
-            // swap entirely — the balance is already WPLS after the wrap.
-            // (We don't support this edge case optimally since our design
-            // targets eHEX. Leave plsBal held until admin intervenes.)
-            return;
-        }
+        if (plsBal == 0 || plsBal < minSwapThreshold) return;
 
         address[] memory path = new address[](2);
-        path[0] = wpls;
+        path[0] = WPLS;
         path[1] = address(REWARDS_TOKEN);
 
+        uint256 rewardBefore = REWARDS_TOKEN.balanceOf(address(this));
         try dexRouter.swapExactETHForTokensSupportingFeeOnTransferTokens{value: plsBal}(
-            0, // accept any amount — MEV protection isn't critical for reward injection
+            0,
             path,
             address(this),
             block.timestamp
-        ) {} catch {
-            // Swap failed (pair missing, liquidity thin, etc). Leave PLS in
-            // place for the next attempt — DO NOT revert the parent action.
-        }
+        ) {
+            uint256 received = REWARDS_TOKEN.balanceOf(address(this)) - rewardBefore;
+            emit PLSSwapped(plsBal, received);
+        } catch {}
     }
 
     function _processRewardsIfNew() internal {
-        // --- 0. Convert any pending PLS (from factory tax) into reward token. ---
+        // 0. Swap pending PLS
         _swapPendingPLSForRewardToken();
+        // 0b. Swap pending penalty tokens
+        _swapPendingPenaltyTokens();
 
-        // --- 1. Snap global state to now (same as updateReward(address(0))). ---
+        // 1. Snap global state to now
         uint256 newRPT = rewardPerToken();
-        if (newRPT > rewardPerTokenStored && _totalSupply > 0) {
-            totalOwed += ((newRPT - rewardPerTokenStored) * _totalSupply) / 1e18;
+        if (newRPT > rewardPerTokenStored && _totalEffectiveSupply > 0) {
+            totalOwed += ((newRPT - rewardPerTokenStored) * _totalEffectiveSupply) / PRECISION;
         }
         rewardPerTokenStored = newRPT;
         lastUpdateTime = lastTimeRewardApplicable();
 
-        // --- 2. Look for uncommitted reward tokens. ---
+        // 2. Look for uncommitted reward tokens
         uint256 balance = REWARDS_TOKEN.balanceOf(address(this));
-        // When the staking token IS the reward token, the staked principal sits
-        // in the same balance — exclude it so stakes can't be paid out as rewards.
         if (address(STAKING_TOKEN) == address(REWARDS_TOKEN)) {
-            balance -= _totalSupply;
+            balance -= _totalRawSupply;
+            balance -= pendingPenaltyTokens;
         }
 
         uint256 futureDrip;
@@ -427,12 +753,6 @@ contract StakingVault is IStakingVault, Ownable, ReentrancyGuard {
 
         if (balance > committed) {
             uint256 reward = balance - committed;
-            // Dust tolerance: the rewardPerToken / totalOwed math floor-divides
-            // and leaves ≤ O(rewardsDuration) wei of residual between committed
-            // and balance. Only restart the drip if the excess would produce a
-            // nonzero per-second rate (>= 1 wei / second). This also stops the
-            // autoProcess hook from spuriously extending periodFinish on every
-            // user action when no real tax has arrived.
             if (reward >= rewardsDuration) {
                 _startRewardPeriod(reward);
                 emit RewardAdded(reward);
@@ -468,8 +788,14 @@ contract StakingVault is IStakingVault, Ownable, ReentrancyGuard {
         emit DaoAddressUpdated(old, dao);
     }
 
+    function setDevWallet(address dev) external onlyOwner {
+        address old = devWallet;
+        devWallet = dev;
+        emit DevWalletUpdated(old, dev);
+    }
+
     function setTopStakerCount(uint256 count) external onlyOwner {
-        require(count > 0, "StakingVault: zero top count");
+        require(count > 0 && count <= MAX_TOP_STAKER_COUNT, "StakingVault: invalid top count");
         uint256 old = topStakerCount;
         topStakerCount = count;
 
@@ -480,6 +806,17 @@ contract StakingVault is IStakingVault, Ownable, ReentrancyGuard {
         }
 
         emit TopStakerCountUpdated(old, count);
+    }
+
+    /// @notice Set the staking token (one-time only, for deploy-before-token flow).
+    function setStakingToken(address _stakingToken) external onlyOwner {
+        require(address(STAKING_TOKEN) == address(0), "StakingVault: token already set");
+        require(_stakingToken != address(0), "StakingVault: zero address");
+        STAKING_TOKEN = IERC20(_stakingToken);
+    }
+
+    function setMinSwapThreshold(uint256 threshold) external onlyOwner {
+        minSwapThreshold = threshold;
     }
 
     function setRewardsDuration(uint256 duration) external onlyOwner {
@@ -497,11 +834,19 @@ contract StakingVault is IStakingVault, Ownable, ReentrancyGuard {
         emit Paused(_paused);
     }
 
-    /// @notice Recover tokens accidentally sent to this contract.
-    ///         Cannot recover the staking token.
     function recoverERC20(address token, uint256 amount) external onlyOwner {
         require(token != address(STAKING_TOKEN), "StakingVault: cannot recover staking token");
+        require(token != address(REWARDS_TOKEN), "StakingVault: cannot recover rewards token");
         IERC20(token).safeTransfer(owner(), amount);
+    }
+
+    /// @notice Rescue stuck penalty tokens when DEX swaps keep failing.
+    function rescuePendingPenaltyTokens(address recipient) external onlyOwner {
+        uint256 amount = pendingPenaltyTokens;
+        require(amount > 0, "StakingVault: nothing pending");
+        pendingPenaltyTokens = 0;
+        STAKING_TOKEN.safeTransfer(recipient, amount);
+        emit PenaltyTokensRescued(amount, recipient);
     }
 
     // -------------------------------------------------------------------------
@@ -510,6 +855,7 @@ contract StakingVault is IStakingVault, Ownable, ReentrancyGuard {
 
     function lockForVote(address voter, uint256 lockUntil) external {
         require(msg.sender == daoAddress, "StakingVault: caller is not DAO");
+        require(lockUntil <= block.timestamp + MAX_VOTE_LOCK_DURATION, "StakingVault: lock too long");
         if (lockUntil > voteLockEnd[voter]) {
             voteLockEnd[voter] = lockUntil;
         }
@@ -529,6 +875,50 @@ contract StakingVault is IStakingVault, Ownable, ReentrancyGuard {
     }
 
     // -------------------------------------------------------------------------
+    // Internal — reward materialization
+    // -------------------------------------------------------------------------
+
+    /// @dev Materializes pending rewards for the user's flex balance and all locks.
+    ///      Updates each position's rewardPerTokenPaid snapshot and accumulates
+    ///      pending rewards. Called from the updateReward modifier.
+    function _materializeRewards(address account) internal {
+        uint256 currentRPT = rewardPerTokenStored;
+
+        // Flex rewards — flex effective = flex balance (1x)
+        uint256 flexEff = _flexBalance[account];
+        if (flexEff > 0) {
+            rewards[account] +=
+                (flexEff * (currentRPT - userRewardPerTokenPaid[account])) / PRECISION;
+        }
+        userRewardPerTokenPaid[account] = currentRPT;
+
+        // Lock rewards
+        LockPosition[] storage locks = _locks[account];
+        for (uint256 i; i < locks.length;) {
+            uint256 lockEff = (locks[i].amount * locks[i].multiplier) / BPS;
+            locks[i].pendingRewards +=
+                (lockEff * (currentRPT - locks[i].rewardPerTokenPaid)) / PRECISION;
+            locks[i].rewardPerTokenPaid = currentRPT;
+            unchecked { ++i; }
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Internal — lock tier multiplier
+    // -------------------------------------------------------------------------
+
+    function _getMultiplier(uint256 duration) internal pure returns (uint256) {
+        if (duration == 0)          return 10000;   // 1.0x
+        if (duration == 90 days)    return 15000;   // 1.5x
+        if (duration == 180 days)   return 20000;   // 2.0x
+        if (duration == 365 days)   return 30000;   // 3.0x
+        if (duration == 730 days)   return 40000;   // 4.0x
+        if (duration == 1825 days)  return 60000;   // 6.0x
+        if (duration == 3650 days)  return 100000;  // 10.0x
+        revert("StakingVault: invalid lock duration");
+    }
+
+    // -------------------------------------------------------------------------
     // Internal — reward period management
     // -------------------------------------------------------------------------
 
@@ -543,10 +933,9 @@ contract StakingVault is IStakingVault, Ownable, ReentrancyGuard {
 
         uint256 balance = REWARDS_TOKEN.balanceOf(address(this));
         if (address(STAKING_TOKEN) == address(REWARDS_TOKEN)) {
-            balance -= _totalSupply;
+            balance -= _totalRawSupply;
+            balance -= pendingPenaltyTokens;
         }
-        // Solvency: the new rewardRate must be sustainable from the funds that
-        // are NOT already promised to existing stakers (totalOwed).
         require(balance >= totalOwed, "StakingVault: insolvent");
         uint256 available = balance - totalOwed;
         require(
@@ -559,25 +948,27 @@ contract StakingVault is IStakingVault, Ownable, ReentrancyGuard {
     }
 
     // -------------------------------------------------------------------------
-    // Internal — top staker management
+    // Internal — top staker management (ranked by effective balance)
     // -------------------------------------------------------------------------
 
     function _updateTopStakers(address account) internal {
-        uint256 bal = _balances[account];
+        uint256 bal = _userEffectiveBalance[account];
         uint256 len = _topStakers.length;
         uint256 maxLen = topStakerCount;
 
         // If already in list, remove first then re-insert.
         if (_isTopStaker[account]) {
             uint256 idx;
-            for (uint256 i; i < len; ++i) {
+            for (uint256 i; i < len;) {
                 if (_topStakers[i] == account) {
                     idx = i;
                     break;
                 }
+                unchecked { ++i; }
             }
-            for (uint256 i = idx; i < len - 1; ++i) {
+            for (uint256 i = idx; i < len - 1;) {
                 _topStakers[i] = _topStakers[i + 1];
+                unchecked { ++i; }
             }
             _topStakers.pop();
             _isTopStaker[account] = false;
@@ -586,11 +977,12 @@ contract StakingVault is IStakingVault, Ownable, ReentrancyGuard {
 
         // Find insertion index (descending order).
         uint256 insertAt = len;
-        for (uint256 i; i < len; ++i) {
-            if (bal > _balances[_topStakers[i]]) {
+        for (uint256 i; i < len;) {
+            if (bal > _userEffectiveBalance[_topStakers[i]]) {
                 insertAt = i;
                 break;
             }
+            unchecked { ++i; }
         }
 
         if (insertAt >= maxLen) return;
@@ -613,15 +1005,17 @@ contract StakingVault is IStakingVault, Ownable, ReentrancyGuard {
         if (!_isTopStaker[account]) return;
 
         uint256 len = _topStakers.length;
-        for (uint256 i; i < len; ++i) {
+        for (uint256 i; i < len;) {
             if (_topStakers[i] == account) {
-                for (uint256 j = i; j < len - 1; ++j) {
+                for (uint256 j = i; j < len - 1;) {
                     _topStakers[j] = _topStakers[j + 1];
+                    unchecked { ++j; }
                 }
                 _topStakers.pop();
                 _isTopStaker[account] = false;
                 return;
             }
+            unchecked { ++i; }
         }
     }
 }

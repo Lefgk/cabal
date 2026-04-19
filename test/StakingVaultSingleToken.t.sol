@@ -172,8 +172,9 @@ contract StakingVaultSingleTokenTest is Test {
         vm.prank(bob);
         vault.withdraw(100e18);
 
-        assertApproxEqAbs(token.balanceOf(alice), 100e18 + 500e18, 1e15);
-        assertApproxEqAbs(token.balanceOf(bob),   100e18 + 500e18, 1e15);
+        // Each gets 99% of principal (1% fee) + 500e18 rewards
+        assertApproxEqAbs(token.balanceOf(alice), 99e18 + 500e18, 1e15);
+        assertApproxEqAbs(token.balanceOf(bob),   99e18 + 500e18, 1e15);
     }
 
     function test_singleToken_processRewards_multipleCallsCompound() public {
@@ -249,29 +250,16 @@ contract StakingVaultSingleTokenTest is Test {
     //  Malicious rewarder cannot drain principal
     // ---------------------------------------------------------------
 
-    function test_singleToken_maliciousNotify_cannotDrainPrincipal() public {
+    function test_singleToken_maliciousNotify_revertsNonOwner() public {
         _stakeFor(alice, 100e18);
-        assertEq(token.balanceOf(address(vault)), 100e18);
 
-        // Attacker notifies 1 wei (minimal reward).
+        // Attacker tries to call notifyRewardAmount — blocked by onlyOwner.
         token.mint(attacker, 1);
         vm.startPrank(attacker);
         token.approve(address(vault), 1);
+        vm.expectRevert();
         vault.notifyRewardAmount(1);
         vm.stopPrank();
-
-        vm.warp(block.timestamp + SEVEN_DAYS);
-
-        // Alice's earned should be at most 1 wei (the attacker's contribution),
-        // NOT her 100e18 principal.
-        assertLe(vault.earned(alice), 1);
-
-        // Alice can still withdraw full principal.
-        vm.prank(alice);
-        vault.withdraw(100e18);
-        assertEq(vault.stakedBalance(alice), 0);
-        // She receives at least her 100e18 principal back.
-        assertGe(token.balanceOf(alice), 100e18);
     }
 
     function test_singleToken_maliciousProcessRewards_cannotDrainPrincipal() public {
@@ -300,8 +288,10 @@ contract StakingVaultSingleTokenTest is Test {
         vm.prank(alice);
         vault.withdraw(40e18);
 
+        // 1% fee on 40e18 = 0.4e18 burned to DEAD
         assertEq(vault.stakedBalance(alice), 60e18);
-        assertEq(token.balanceOf(alice), 40e18);
+        assertEq(token.balanceOf(alice), 39.6e18);
+        // vault holds: 60e18 (staked only, fee was burned)
         assertEq(token.balanceOf(address(vault)), 60e18);
     }
 
@@ -336,8 +326,8 @@ contract StakingVaultSingleTokenTest is Test {
         vault.exit();
 
         assertEq(vault.stakedBalance(alice), 0);
-        // Alice gets principal (100e18) + ~reward (~700e18)
-        assertApproxEqAbs(token.balanceOf(alice), 800e18, 1e15);
+        // Alice gets 99% of principal (99e18) + ~reward (~700e18), 1% fee stays in vault
+        assertApproxEqAbs(token.balanceOf(alice), 799e18, 1e15);
     }
 
     // ---------------------------------------------------------------
@@ -361,9 +351,9 @@ contract StakingVaultSingleTokenTest is Test {
         vm.prank(bob);
         vault.exit();
 
-        // Principals back + proportional rewards
-        assertApproxEqAbs(token.balanceOf(alice), 75e18 + 750e18, 1e15);
-        assertApproxEqAbs(token.balanceOf(bob), 25e18 + 250e18, 1e15);
+        // 99% of principals back + proportional rewards (1% fee stays in vault)
+        assertApproxEqAbs(token.balanceOf(alice), 74.25e18 + 750e18, 1e15);
+        assertApproxEqAbs(token.balanceOf(bob), 24.75e18 + 250e18, 1e15);
     }
 
     function test_singleToken_multipleStakers_allCanExit() public {
@@ -385,9 +375,10 @@ contract StakingVaultSingleTokenTest is Test {
 
         assertEq(vault.totalStaked(), 0);
         assertEq(vault.totalStakers(), 0);
-        assertApproxEqAbs(token.balanceOf(alice), 100e18 + 300e18, 1e15);
-        assertApproxEqAbs(token.balanceOf(bob),   100e18 + 300e18, 1e15);
-        assertApproxEqAbs(token.balanceOf(carol), 100e18 + 300e18, 1e15);
+        // Each gets 99% of 100e18 principal (1% fee) + 300e18 rewards
+        assertApproxEqAbs(token.balanceOf(alice), 99e18 + 300e18, 1e15);
+        assertApproxEqAbs(token.balanceOf(bob),   99e18 + 300e18, 1e15);
+        assertApproxEqAbs(token.balanceOf(carol), 99e18 + 300e18, 1e15);
     }
 
     function test_singleToken_lateStaker_getsProRata() public {

@@ -56,7 +56,6 @@ interface ITreasuryDAO {
     event VotingPeriodUpdated(uint256 oldPeriod, uint256 newPeriod);
     event QuorumBpsUpdated(uint256 oldBps, uint256 newBps);
     event DexRouterUpdated(address indexed oldRouter, address indexed newRouter);
-    event WplsAddressUpdated(address indexed oldWpls, address indexed newWpls);
     event TokenAddressUpdated(address indexed oldToken, address indexed newToken);
 
     // --- Proposal lifecycle ---
@@ -69,6 +68,8 @@ interface ITreasuryDAO {
     function castVote(uint256 proposalId, bool support) external;
 
     function executeProposal(uint256 proposalId) external;
+    function unlockDefeated(uint256 proposalId) external;
+    function unlockDefeatedBatch(uint256[] calldata proposalIds) external;
 
     // --- Treasury ---
     function depositWPLS(uint256 amount) external;
@@ -85,6 +86,5 @@ interface ITreasuryDAO {
     function setVotingPeriod(uint256 period) external;
     function setQuorumBps(uint256 bps) external;
     function setDexRouter(address router) external;
-    function setWpls(address wpls) external;
     function setToken(address token) external;
 }

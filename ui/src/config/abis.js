@@ -1,5 +1,5 @@
 export const STAKING_VAULT_ABI = [
-  // Core staking (Synthetix-style)
+  // Core staking
   {
     name: 'stake',
     type: 'function',
@@ -28,6 +28,25 @@ export const STAKING_VAULT_ABI = [
     inputs: [],
     outputs: [],
   },
+  // Lock staking
+  {
+    name: 'stakeLocked',
+    type: 'function',
+    stateMutability: 'nonpayable',
+    inputs: [
+      { name: 'amount', type: 'uint256' },
+      { name: 'duration', type: 'uint256' },
+    ],
+    outputs: [],
+  },
+  {
+    name: 'unlock',
+    type: 'function',
+    stateMutability: 'nonpayable',
+    inputs: [{ name: 'lockIds', type: 'uint256[]' }],
+    outputs: [],
+  },
+  // Views
   {
     name: 'earned',
     type: 'function',
@@ -42,7 +61,6 @@ export const STAKING_VAULT_ABI = [
     inputs: [{ name: 'reward', type: 'uint256' }],
     outputs: [],
   },
-  // Synthetix reward info
   {
     name: 'rewardRate',
     type: 'function',
@@ -121,9 +139,23 @@ export const STAKING_VAULT_ABI = [
     inputs: [],
     outputs: [{ name: '', type: 'address[]' }],
   },
-  // View helpers
+  // Balance views
   {
     name: 'stakedBalance',
+    type: 'function',
+    stateMutability: 'view',
+    inputs: [{ name: 'user', type: 'address' }],
+    outputs: [{ name: '', type: 'uint256' }],
+  },
+  {
+    name: 'flexBalance',
+    type: 'function',
+    stateMutability: 'view',
+    inputs: [{ name: 'user', type: 'address' }],
+    outputs: [{ name: '', type: 'uint256' }],
+  },
+  {
+    name: 'effectiveBalance',
     type: 'function',
     stateMutability: 'view',
     inputs: [{ name: 'user', type: 'address' }],
@@ -137,7 +169,28 @@ export const STAKING_VAULT_ABI = [
     outputs: [{ name: '', type: 'uint256' }],
   },
   {
+    name: 'totalRawStaked',
+    type: 'function',
+    stateMutability: 'view',
+    inputs: [],
+    outputs: [{ name: '', type: 'uint256' }],
+  },
+  {
+    name: 'totalEffectiveStaked',
+    type: 'function',
+    stateMutability: 'view',
+    inputs: [],
+    outputs: [{ name: '', type: 'uint256' }],
+  },
+  {
     name: 'daoAddress',
+    type: 'function',
+    stateMutability: 'view',
+    inputs: [],
+    outputs: [{ name: '', type: 'address' }],
+  },
+  {
+    name: 'devWallet',
     type: 'function',
     stateMutability: 'view',
     inputs: [],
@@ -150,7 +203,83 @@ export const STAKING_VAULT_ABI = [
     inputs: [],
     outputs: [{ name: '', type: 'uint256' }],
   },
-  // Top-up (PLS → reward token swap)
+  // Lock views
+  {
+    name: 'lockCount',
+    type: 'function',
+    stateMutability: 'view',
+    inputs: [{ name: 'user', type: 'address' }],
+    outputs: [{ name: '', type: 'uint256' }],
+  },
+  {
+    name: 'getLock',
+    type: 'function',
+    stateMutability: 'view',
+    inputs: [
+      { name: 'user', type: 'address' },
+      { name: 'lockId', type: 'uint256' },
+    ],
+    outputs: [{
+      name: '',
+      type: 'tuple',
+      components: [
+        { name: 'amount', type: 'uint256' },
+        { name: 'lockTime', type: 'uint256' },
+        { name: 'unlockTime', type: 'uint256' },
+        { name: 'duration', type: 'uint256' },
+        { name: 'multiplier', type: 'uint256' },
+        { name: 'rewardPerTokenPaid', type: 'uint256' },
+        { name: 'pendingRewards', type: 'uint256' },
+      ],
+    }],
+  },
+  {
+    name: 'getUserLocks',
+    type: 'function',
+    stateMutability: 'view',
+    inputs: [{ name: 'user', type: 'address' }],
+    outputs: [{
+      name: '',
+      type: 'tuple[]',
+      components: [
+        { name: 'amount', type: 'uint256' },
+        { name: 'lockTime', type: 'uint256' },
+        { name: 'unlockTime', type: 'uint256' },
+        { name: 'duration', type: 'uint256' },
+        { name: 'multiplier', type: 'uint256' },
+        { name: 'rewardPerTokenPaid', type: 'uint256' },
+        { name: 'pendingRewards', type: 'uint256' },
+      ],
+    }],
+  },
+  {
+    name: 'pendingRewardForLock',
+    type: 'function',
+    stateMutability: 'view',
+    inputs: [
+      { name: 'user', type: 'address' },
+      { name: 'lockId', type: 'uint256' },
+    ],
+    outputs: [{ name: '', type: 'uint256' }],
+  },
+  {
+    name: 'getMultiplierForDuration',
+    type: 'function',
+    stateMutability: 'pure',
+    inputs: [{ name: 'duration', type: 'uint256' }],
+    outputs: [{ name: '', type: 'uint256' }],
+  },
+  {
+    name: 'getLockTiers',
+    type: 'function',
+    stateMutability: 'pure',
+    inputs: [],
+    outputs: [
+      { name: 'durations', type: 'uint256[]' },
+      { name: 'multipliers', type: 'uint256[]' },
+    ],
+  },
+  // Top-up
   {
     name: 'topUp',
     type: 'function',
@@ -180,6 +309,13 @@ export const STAKING_VAULT_ABI = [
     inputs: [],
     outputs: [{ name: '', type: 'uint256' }],
   },
+  {
+    name: 'pendingPenaltyTokens',
+    type: 'function',
+    stateMutability: 'view',
+    inputs: [],
+    outputs: [{ name: '', type: 'uint256' }],
+  },
   // Vote lock
   {
     name: 'voteLockEnd',
@@ -203,7 +339,7 @@ export const STAKING_VAULT_ABI = [
     inputs: [],
     outputs: [{ name: '', type: 'address' }],
   },
-  // Events (Synthetix-style)
+  // Events
   {
     name: 'Staked',
     type: 'event',
@@ -213,11 +349,44 @@ export const STAKING_VAULT_ABI = [
     ],
   },
   {
+    name: 'StakedLocked',
+    type: 'event',
+    inputs: [
+      { name: 'user', type: 'address', indexed: true },
+      { name: 'amount', type: 'uint256', indexed: false },
+      { name: 'duration', type: 'uint256', indexed: false },
+      { name: 'multiplier', type: 'uint256', indexed: false },
+      { name: 'lockId', type: 'uint256', indexed: false },
+    ],
+  },
+  {
     name: 'Withdrawn',
     type: 'event',
     inputs: [
       { name: 'user', type: 'address', indexed: true },
       { name: 'amount', type: 'uint256', indexed: false },
+      { name: 'fee', type: 'uint256', indexed: false },
+    ],
+  },
+  {
+    name: 'Unlocked',
+    type: 'event',
+    inputs: [
+      { name: 'user', type: 'address', indexed: true },
+      { name: 'lockId', type: 'uint256', indexed: false },
+      { name: 'amount', type: 'uint256', indexed: false },
+      { name: 'penalty', type: 'uint256', indexed: false },
+    ],
+  },
+  {
+    name: 'PenaltyDistributed',
+    type: 'event',
+    inputs: [
+      { name: 'total', type: 'uint256', indexed: false },
+      { name: 'toStakers', type: 'uint256', indexed: false },
+      { name: 'toBurn', type: 'uint256', indexed: false },
+      { name: 'toDao', type: 'uint256', indexed: false },
+      { name: 'toDev', type: 'uint256', indexed: false },
     ],
   },
   {

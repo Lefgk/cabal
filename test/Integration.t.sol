@@ -103,7 +103,9 @@ contract VaultDAOIntegrationTest is Test {
     function setUp() public {
         // Deploy the tax token — deployer is auto-excluded.
         tstt = new MockTaxToken();
-        wpls = new MockWPLS();
+        MockWPLS _tmpWpls = new MockWPLS();
+        vm.etch(0xA1077a294dDE1B09bB078844df40758a5D0f9a27, address(_tmpWpls).code);
+        wpls = MockWPLS(payable(0xA1077a294dDE1B09bB078844df40758a5D0f9a27));
 
         // Vault: single-token staking (STAKING_TOKEN == REWARDS_TOKEN == TSTT)
         vault = new StakingVault(address(tstt), address(tstt), deployer, TOP_COUNT);
@@ -331,6 +333,8 @@ contract VaultDAOIntegrationTest is Test {
         vm.prank(carol);
         vault.stake(25e18);
 
+        vm.warp(block.timestamp + 1);
+
         // Top 3: Alice, Bob, Carol.
         assertTrue(vault.isTopStaker(alice));
         assertTrue(vault.isTopStaker(bob));
@@ -376,6 +380,9 @@ contract VaultDAOIntegrationTest is Test {
         vm.prank(bob);
         vault.stake(400e18);
 
+        // Advance so stakers satisfy the 1-block staking requirement
+        vm.warp(block.timestamp + 1);
+
         // Fund treasury.
         _fundTreasury(500e18);
         assertEq(dao.availableBalance(), 500e18);
@@ -418,6 +425,8 @@ contract VaultDAOIntegrationTest is Test {
         vault.stake(600e18);
         vm.prank(bob);
         vault.stake(400e18);
+
+        vm.warp(block.timestamp + 1);
 
         _fundTreasury(500e18);
 
@@ -464,16 +473,18 @@ contract VaultDAOIntegrationTest is Test {
         vault.processRewards();
         vm.warp(block.timestamp + SEVEN_DAYS);
 
-        // Alice exits — withdraws principal and claims reward.
+        // Alice exits — withdraws principal (minus 1% flex fee burned) and claims reward.
         vm.prank(alice);
         vault.exit();
 
-        // Final balance should be initial stake + (approximately) full tax.
+        // 1% withdraw fee on 1000e18 = 10e18 burned to DEAD (not kept in vault)
+        uint256 flexFee = (1_000e18 * 100) / 10_000; // 1%
+        // Final balance should be initial stake minus fee + (approximately) full tax.
         uint256 aliceFinal = tstt.balanceOf(alice);
-        assertApproxEqAbs(aliceFinal, aliceInitial + expectedTax, expectedTax / 1000);
+        assertApproxEqAbs(aliceFinal, aliceInitial - flexFee + expectedTax, expectedTax / 1000);
 
-        // Vault should have only rounding dust left.
-        assertLt(tstt.balanceOf(address(vault)), expectedTax / 1000);
+        // Vault holds only rounding dust (flex fee was burned, not kept in vault).
+        assertLt(tstt.balanceOf(address(vault)), expectedTax / 1000 + 1e18);
 
         // Alice is no longer staked or a top staker.
         assertEq(vault.stakedBalance(alice), 0);
@@ -567,16 +578,16 @@ contract VaultDAOIntegrationTest is Test {
         vault.exit();
 
         uint256 totalTax = tax1 + tax2 + tax3;
+        uint256 flexFee = (1_000e18 * 100) / 10_000; // 1% withdraw fee
 
-        // Conservation: alice ends with her stake back PLUS up to totalTax
-        // (never more — that's the bug). Allow tiny rounding dust.
+        // Conservation: alice ends with her stake back (minus 1% fee burned) PLUS up
+        // to totalTax (never more — that's the bug). Fee is burned to DEAD. Allow tiny rounding dust.
         uint256 aliceFinal = tstt.balanceOf(alice);
-        assertLe(aliceFinal, 1_000e18 + totalTax);
-        assertApproxEqAbs(aliceFinal, 1_000e18 + totalTax, totalTax / 1000);
+        assertLe(aliceFinal, 1_000e18 - flexFee + totalTax);
+        assertApproxEqAbs(aliceFinal, 1_000e18 - flexFee + totalTax, totalTax / 1000);
 
-        // Vault holds at most the staked-principal-relative dust (zero stake
-        // now, so just rounding dust).
-        assertLt(tstt.balanceOf(address(vault)), totalTax / 1000);
+        // Vault holds only rounding dust (flex fee was burned, not kept in vault).
+        assertLt(tstt.balanceOf(address(vault)), totalTax / 1000 + 1e18);
 
         // Internal accounting cleared.
         assertEq(vault.totalOwed(), 0);
@@ -704,6 +715,8 @@ contract VaultDAOIntegrationTest is Test {
         vault.stake(500e18);
         vm.prank(bob);
         vault.stake(500e18);
+
+        vm.warp(block.timestamp + 1);
 
         _fundTreasury(1_000e18);
 

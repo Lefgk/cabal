@@ -15,9 +15,16 @@ import TokenIcon from './TokenIcon.jsx';
 const vaultAddr = ADDRESSES.stakingVault;
 const tokenAddr = ADDRESSES.stakeToken;
 
-// Display override: native PulseChain HEX reports its on-chain symbol as
-// "HEX", but we present it as "pHEX" throughout the UI to make it unambiguous
-// vs eHEX and to match the client spec.
+// Lock tier metadata for the UI selector
+const LOCK_TIERS = [
+  { duration: 90 * 86400, label: '90 days', multiplier: '1.5x', bps: 15000 },
+  { duration: 180 * 86400, label: '180 days', multiplier: '2.0x', bps: 20000 },
+  { duration: 365 * 86400, label: '1 year', multiplier: '3.0x', bps: 30000 },
+  { duration: 730 * 86400, label: '2 years', multiplier: '4.0x', bps: 40000 },
+  { duration: 1825 * 86400, label: '5 years', multiplier: '6.0x', bps: 60000 },
+  { duration: 3650 * 86400, label: '10 years', multiplier: '10.0x', bps: 100000 },
+];
+
 function displaySymbol(raw) {
   if (!raw) return raw;
   if (raw === 'HEX') return 'pHEX';
@@ -34,10 +41,22 @@ function formatCountdown(seconds) {
   return `${m}m`;
 }
 
+function formatDaysRemaining(unlockTime, now) {
+  const secs = Number(unlockTime) - now;
+  if (secs <= 0) return 'Expired';
+  const d = Math.floor(secs / 86400);
+  const h = Math.floor((secs % 86400) / 3600);
+  if (d > 0) return `${d}d ${h}h`;
+  return `${h}h`;
+}
+
 export default function Staking() {
   const { address } = useAccount();
+  const [tab, setTab] = useState('flex');
   const [stakeAmount, setStakeAmount] = useState('');
   const [withdrawAmount, setWithdrawAmount] = useState('');
+  const [lockAmount, setLockAmount] = useState('');
+  const [selectedTier, setSelectedTier] = useState(0);
   const [showTopStakers, setShowTopStakers] = useState(false);
 
   const {
@@ -51,9 +70,12 @@ export default function Staking() {
   const busy = isWriting || isSimulating || isMining;
   const chain = useConnectedChain();
 
-  // Global reads (no wallet needed)
+  // Global reads
   const { data: totalStaked } = useReadContract({
-    address: vaultAddr, abi: STAKING_VAULT_ABI, functionName: 'totalStaked',
+    address: vaultAddr, abi: STAKING_VAULT_ABI, functionName: 'totalRawStaked',
+  });
+  const { data: totalEffective } = useReadContract({
+    address: vaultAddr, abi: STAKING_VAULT_ABI, functionName: 'totalEffectiveStaked',
   });
   const { data: rewardRate } = useReadContract({
     address: vaultAddr, abi: STAKING_VAULT_ABI, functionName: 'rewardRate',
@@ -89,15 +111,25 @@ export default function Staking() {
   });
 
   // User-specific reads
-  const { data: userStaked } = useReadContract({
+  const { data: userFlexBalance } = useReadContract({
+    address: vaultAddr, abi: STAKING_VAULT_ABI, functionName: 'flexBalance',
+    args: [address], query: { enabled: !!address },
+  });
+  const { data: userEffective } = useReadContract({
+    address: vaultAddr, abi: STAKING_VAULT_ABI, functionName: 'effectiveBalance',
+    args: [address], query: { enabled: !!address },
+  });
+  const { data: userStakedTotal } = useReadContract({
     address: vaultAddr, abi: STAKING_VAULT_ABI, functionName: 'stakedBalance',
     args: [address], query: { enabled: !!address },
   });
-  // Poll earned every 5s so the counter ticks up in real time on public RPC
-  // (which doesn't push block events reliably).
   const { data: earnedRaw } = useReadContract({
     address: vaultAddr, abi: STAKING_VAULT_ABI, functionName: 'earned',
     args: [address], query: { enabled: !!address, refetchInterval: 5000 },
+  });
+  const { data: userLocks } = useReadContract({
+    address: vaultAddr, abi: STAKING_VAULT_ABI, functionName: 'getUserLocks',
+    args: [address], query: { enabled: !!address, refetchInterval: 10000 },
   });
   const { data: isTop } = useReadContract({
     address: vaultAddr, abi: STAKING_VAULT_ABI, functionName: 'isTopStaker',
@@ -115,25 +147,19 @@ export default function Staking() {
     address: tokenAddr, abi: ERC20_ABI, functionName: 'balanceOf',
     args: [address], query: { enabled: !!address },
   });
-  // Raw PLS sitting on the vault — queued for the next autoProcess swap.
-  // Taxes arrive here from buys/sells and stay until the next
-  // stake/withdraw/getReward touches the vault. Polled every 10s so
-  // users can watch pending taxes grow in real time.
   const { data: vaultPlsBal } = useBalance({
     address: vaultAddr,
     query: { refetchInterval: 10000 },
   });
-  // totalOwed = rewards already credited to stakers but not yet claimed.
   const { data: totalOwed } = useReadContract({
     address: vaultAddr, abi: STAKING_VAULT_ABI, functionName: 'totalOwed',
   });
-  // pHEX balance sitting in the vault (dripping + unclaimed + dust).
   const { data: vaultPhexBal } = useReadContract({
     address: rewardsTokenAddr, abi: ERC20_ABI, functionName: 'balanceOf',
     args: [vaultAddr], query: { enabled: !!rewardsTokenAddr },
   });
 
-  // Derived values — tick `now` every second so the countdown updates live
+  // Tick
   const [now, setNow] = useState(Math.floor(Date.now() / 1000));
   useEffect(() => {
     const id = setInterval(() => setNow(Math.floor(Date.now() / 1000)), 1000);
@@ -143,52 +169,38 @@ export default function Staking() {
   const isActive = timeLeft > 0;
   const rwdSymbol = displaySymbol(rewardsTokenSymbol) || 'RWD';
   const stkSymbol = stakeTokenSymbol || 'TOKEN';
-  // Reward token decimals (pHEX = 8, NOT 18). We MUST NOT use formatEther
-  // for reward amounts — it would under-report by 10^10.
   const rwdDec = rewardsTokenDecimals !== undefined ? Number(rewardsTokenDecimals) : 18;
 
-  // User pool share %
+  // Pool share by effective weight
   const poolShare = (() => {
-    if (!userStaked || !totalStaked || totalStaked === 0n) return null;
-    return (Number(formatEther(userStaked)) / Number(formatEther(totalStaked))) * 100;
+    if (!userEffective || !totalEffective || totalEffective === 0n) return null;
+    return (Number(formatEther(userEffective)) / Number(formatEther(totalEffective))) * 100;
   })();
 
-  // Duration label
   const durationLabel = rewardsDuration ? `${Number(rewardsDuration) / 86400}d` : '...';
 
-  // Dust-drip detector: Synthetix-style rewardPerToken uses 1e18 fixed-point
-  // scaling, so the per-second delta is `rewardRate * 1e18 / totalStaked`.
-  // If that's < 1, integer truncation floors it to 0 and `earned()` stays at
-  // 0 for every staker until ~`totalStaked / (rewardRate * 1e18)` seconds
-  // have elapsed. Contract is fine — seed is just too small for current
-  // stake depth. Flag it so users understand why Claimable isn't ticking.
-  const dustDrip = (() => {
-    if (!rewardRate || !totalStaked || !isActive) return null;
-    if (rewardRate === 0n || totalStaked === 0n) return null;
-    const scaled = rewardRate * 10n ** 18n;
-    if (scaled >= totalStaked) return null; // tick ≥ 1 wei/sec, healthy
-    // Seconds until rewardPerToken ticks up by 1 wei
-    const secsPerTick = totalStaked / scaled;
-    return { secsPerTick };
-  })();
-
-  // Vote lock: user cannot withdraw/exit while voteLockEnd > now
+  // Vote lock
   const voteLockEnd = voteLockEndRaw ? Number(voteLockEndRaw) : 0;
   const voteLocked = voteLockEnd > 0 && now <= voteLockEnd;
-  const voteLockDate = voteLocked
-    ? new Date(voteLockEnd * 1000).toLocaleString()
-    : null;
+  const voteLockDate = voteLocked ? new Date(voteLockEnd * 1000).toLocaleString() : null;
 
-  // Only flag as needing approval when the user has entered a valid amount
-  // that exceeds the current allowance. An empty input should NOT force the
-  // button to "Approve" when the wallet is already max-approved.
-  const needsApproval = (() => {
-    if (!stakeAmount) return false;
-    let wanted;
-    try { wanted = parseEther(stakeAmount); } catch { return false; }
-    return (allowance ?? 0n) < wanted;
+  // Locked balance = total - flex
+  const userLockedBalance = (() => {
+    if (userStakedTotal === undefined || userFlexBalance === undefined) return undefined;
+    return userStakedTotal - userFlexBalance;
   })();
 
+  // Approval check
+  const needsApprovalFor = (amt) => {
+    if (!amt) return false;
+    let wanted;
+    try { wanted = parseEther(amt); } catch { return false; }
+    return (allowance ?? 0n) < wanted;
+  };
+
+  const needsApproval = needsApprovalFor(tab === 'flex' ? stakeAmount : lockAmount);
+
+  // Handlers
   const handleApprove = () => {
     writeContract({ address: tokenAddr, abi: ERC20_ABI, functionName: 'approve', args: [vaultAddr, maxUint256] });
   };
@@ -208,39 +220,55 @@ export default function Staking() {
   const handleExit = () => {
     writeContract({ address: vaultAddr, abi: STAKING_VAULT_ABI, functionName: 'exit' });
   };
-  // Any wallet can fire processRewards() — it's the public keeper hook
-  // that folds pending PLS into the drip. Unlike stake/withdraw/getReward,
-  // it doesn't require the caller to be a staker, so non-holders can
-  // also poke the vault to keep rewards flowing.
   const handleProcess = () => {
     writeContract({ address: vaultAddr, abi: STAKING_VAULT_ABI, functionName: 'processRewards' });
   };
+  const handleStakeLocked = () => {
+    if (!lockAmount) return;
+    const tier = LOCK_TIERS[selectedTier];
+    writeContract({
+      address: vaultAddr,
+      abi: STAKING_VAULT_ABI,
+      functionName: 'stakeLocked',
+      args: [parseEther(lockAmount), BigInt(tier.duration)],
+    });
+    setLockAmount('');
+  };
+  const handleUnlock = (lockId) => {
+    writeContract({
+      address: vaultAddr,
+      abi: STAKING_VAULT_ABI,
+      functionName: 'unlock',
+      args: [[BigInt(lockId)]],
+    });
+  };
+  const handleUnlockAllExpired = () => {
+    if (!userLocks) return;
+    const expiredIds = [];
+    for (let i = userLocks.length - 1; i >= 0; i--) {
+      if (Number(userLocks[i].unlockTime) <= now) {
+        expiredIds.push(BigInt(i));
+      }
+    }
+    if (expiredIds.length === 0) return;
+    // Already in descending order since we iterate backwards
+    writeContract({
+      address: vaultAddr,
+      abi: STAKING_VAULT_ABI,
+      functionName: 'unlock',
+      args: [expiredIds],
+    });
+  };
 
-  // Stake-token amounts (always 18d)
+  // Formatting
   const fmt = (val) => {
     if (val === undefined || val === null) return '...';
     return Number(formatEther(val)).toLocaleString(undefined, { maximumFractionDigits: 4 });
   };
-  // Reward-token amounts — uses the on-chain decimals (pHEX = 8). Default
-  // to 4 fraction digits for headline numbers; pass more for the user's
-  // live "earned" counter so small drip amounts don't round to zero.
-  // When `pad` is true, trailing zeros stay visible so the counter
-  // always shows the full decimal column (otherwise `toLocaleString`
-  // collapses `0.00000000` down to `0` and you can't see it tick).
-  const fmtRwd = (val, frac = 4, pad = false) => {
+  const fmtRwd = (val, frac = 4) => {
     if (val === undefined || val === null) return '...';
-    return Number(formatUnits(val, rwdDec)).toLocaleString(undefined, {
-      maximumFractionDigits: frac,
-      minimumFractionDigits: pad ? frac : 0,
-    });
+    return Number(formatUnits(val, rwdDec)).toLocaleString(undefined, { maximumFractionDigits: frac });
   };
-  // Fixed-precision string formatter. Uses viem's formatUnits to get an
-  // exact decimal string (no JS float rounding), then pads/truncates to
-  // `places` fraction digits and adds thousands separators on the integer
-  // side. We call this with 18 for the on-screen counters so users can
-  // see even the smallest drip movements — pHEX only has 8 real decimals
-  // of precision so positions 9–18 will always be trailing zeros, which
-  // is expected.
   const fmtExact = (val, decimals, places = 18) => {
     if (val === undefined || val === null) return '...';
     const s = formatUnits(val, decimals);
@@ -249,7 +277,9 @@ export default function Staking() {
     const wholeFmt = Number(whole).toLocaleString();
     return `${wholeFmt}.${frac}`;
   };
-  const fmtRwdExact = (val, places = 18) => fmtExact(val, rwdDec, places);
+  const fmtRwdExact = (val, places = 8) => fmtExact(val, rwdDec, places);
+
+  const hasExpiredLocks = userLocks && userLocks.some(lk => Number(lk.unlockTime) <= now);
 
   return (
     <div className="card">
@@ -276,7 +306,9 @@ export default function Staking() {
       </div>
 
       <p className="help-text">
-        Stake {stkSymbol} to earn {rwdSymbol}. Rewards drip linearly over {durationLabel}. Top 100 stakers can create DAO proposals. Withdraw anytime unless you have an active vote.
+        Stake {stkSymbol} to earn {rwdSymbol}. Flex stake (1x, 1% withdraw fee) or lock for higher
+        multipliers (up to 10x). Rewards drip linearly over {durationLabel}. Top 100 stakers
+        (by effective weight) can create DAO proposals.
       </p>
 
       {isActive && getRewardForDuration && (
@@ -288,75 +320,37 @@ export default function Staking() {
         </div>
       )}
 
-      {/* Dust-drip warning — drip is technically active but rewardRate is so
-          small vs totalStaked that `rewardPerToken` integer-divides to 0 and
-          Claimable will sit at 0 until enough time elapses for the fixed-point
-          math to tick. Standard Synthetix pitfall on under-seeded vaults. */}
-      {dustDrip && (
-        <div
-          className="apr-banner"
-          style={{
-            background: 'linear-gradient(135deg, rgba(234,179,8,0.15), rgba(249,115,22,0.10))',
-            borderColor: 'rgba(234,179,8,0.4)',
-          }}
-          title="Synthetix-style rewardPerToken uses 1e18 fixed-point scaling. When rewardRate × 1e18 < totalStaked, the per-second delta floors to 0 and earned() stays at 0 until enough seconds elapse to tick the integer. Fix: top up the drip."
-        >
-          <span className="apr-label" style={{ color: '#eab308' }}>
-            ⚠ Drip below precision
-          </span>
-          <span className="apr-value" style={{ color: '#eab308', fontSize: 13 }}>
-            Claimable stuck at 0 — ticks every{' '}
-            {dustDrip.secsPerTick >= 86400n
-              ? `${Number(dustDrip.secsPerTick / 86400n)}d`
-              : dustDrip.secsPerTick >= 3600n
-                ? `${Number(dustDrip.secsPerTick / 3600n)}h`
-                : `${Number(dustDrip.secsPerTick)}s`}
-          </span>
-          <span className="apr-note">
-            Drip is active and funded, but the reward rate ({rewardRate?.toString()} wei pHEX/sec)
-            is too small vs total staked ({fmt(totalStaked)} {stkSymbol}) for Solidity's
-            fixed-point math to represent per-second accrual. Counter will remain 0 until
-            ~{dustDrip.secsPerTick >= 86400n
-              ? `${Number(dustDrip.secsPerTick / 86400n)} day(s)`
-              : `${Number(dustDrip.secsPerTick / 3600n)} hour(s)`}{' '}
-            from the last notify. Top up the drip with more pHEX to fix.
-          </span>
-        </div>
-      )}
-
-      {/* Pending-swap banner — raw PLS sitting on the vault from recent
-          tax forwards. Auto-swaps to pHEX on the next stake/withdraw/
-          getReward via the autoProcess modifier. Rendered prominently
-          so users can watch the queue grow between triggers. */}
+      {/* Pending-swap banner */}
       <div
         className="apr-banner"
         style={{ background: 'linear-gradient(135deg, rgba(59,130,246,0.15), rgba(124,58,237,0.10))', borderColor: 'rgba(59,130,246,0.3)' }}
-        title="Raw PLS sitting on the vault from recent sell taxes. On the next stake/withdraw/claim, autoProcess swaps it to pHEX and (if it clears the dust threshold) extends the drip."
+        title="Raw PLS sitting on the vault from recent sell taxes."
       >
-        <span className="apr-label">Pending swap → pHEX</span>
+        <span className="apr-label">Pending swap → {rwdSymbol}</span>
         <span className="apr-value" style={{ color: 'var(--blue)', fontSize: 14, wordBreak: 'break-all' }}>
           {vaultPlsBal ? fmtExact(vaultPlsBal.value, 18, 18) : '...'} <TokenIcon symbol="PLS" />PLS
-        </span>
-        <span className="apr-note">
-          Fires automatically on the next stake / withdraw / claim. Needs ≥ 604,800 wei pHEX after swap to restart the drip.
         </span>
         <div style={{ marginTop: 10 }}>
           <button
             className="btn-blue"
             onClick={handleProcess}
             disabled={!address || isWriting || !vaultPlsBal || vaultPlsBal.value === 0n}
-            title="Call processRewards() on the vault — public keeper hook that swaps pending PLS to pHEX and extends the drip. Anyone can call this, no stake required."
             style={{ fontSize: 12, padding: '6px 12px' }}
           >
-            Process pending → pHEX
+            Process pending → {rwdSymbol}
           </button>
         </div>
       </div>
 
+      {/* Pool stats */}
       <div className="stats-grid">
         <div className="stat-box">
           <span className="stat-label">Total Staked</span>
           <span className="stat-value">{fmt(totalStaked)} <TokenIcon symbol={stkSymbol} />{stkSymbol}</span>
+        </div>
+        <div className="stat-box">
+          <span className="stat-label">Total Effective</span>
+          <span className="stat-value">{fmt(totalEffective)} <TokenIcon symbol={stkSymbol} />eff</span>
         </div>
         <div className="stat-box">
           <span className="stat-label">Stakers</span>
@@ -368,17 +362,18 @@ export default function Staking() {
         </div>
       </div>
 
+      {/* Vault Health */}
       <h3 style={{ marginTop: 20, marginBottom: 8 }}>Vault Health</h3>
       <div className="stats-grid">
-        <div className="stat-box" title="Total pHEX held by the vault (active drip + unclaimed rewards + dust)">
+        <div className="stat-box" title="Total reward tokens held by the vault">
           <span className="stat-label">Vault {rwdSymbol}</span>
           <span className="stat-value">{fmtRwd(vaultPhexBal, rwdDec)} <TokenIcon symbol={rwdSymbol} />{rwdSymbol}</span>
         </div>
-        <div className="stat-box" title="pHEX already credited to stakers' Claimable balances but not yet withdrawn">
+        <div className="stat-box" title="Rewards credited but not yet claimed">
           <span className="stat-label">Unclaimed</span>
           <span className="stat-value">{fmtRwd(totalOwed, rwdDec)} <TokenIcon symbol={rwdSymbol} />{rwdSymbol}</span>
         </div>
-        <div className="stat-box" title="pHEX remaining in the active 7-day drip (vault balance minus what's already owed to stakers)">
+        <div className="stat-box" title="Remaining drip budget">
           <span className="stat-label">Drip Budget</span>
           <span className="stat-value">
             {vaultPhexBal !== undefined && totalOwed !== undefined
@@ -388,50 +383,246 @@ export default function Staking() {
         </div>
       </div>
 
-      {/* User stats — always shown, empty when disconnected */}
+      {/* Summary Panel */}
       <h3 style={{ marginTop: 20, marginBottom: 8 }}>Your Position</h3>
       <div className="stats-grid">
         <div className="stat-box">
-          <span className="stat-label">Staked {address && poolShare !== null ? `(${poolShare.toFixed(2)}%)` : ''}</span>
-          <span className="stat-value">{address ? fmt(userStaked) : '—'} <TokenIcon symbol={stkSymbol} />{stkSymbol}</span>
-        </div>
-        <div
-          className="stat-box"
-          title="Your claimable rewards right now, at pHEX's native 8-decimal precision. Click 'Claim Rewards' below to withdraw this amount."
-        >
-          <span className="stat-label">Claimable</span>
-          <span
-            className="stat-value highlight-green"
-            style={{ fontSize: 13, wordBreak: 'break-all' }}
-          >
-            {address ? fmtRwdExact(earnedRaw, 8) : '—'} <TokenIcon symbol={rwdSymbol} />{rwdSymbol}
-          </span>
+          <span className="stat-label">Effective Weight {address && poolShare !== null ? `(${poolShare.toFixed(2)}%)` : ''}</span>
+          <span className="stat-value">{address ? fmt(userEffective) : '—'} eff</span>
         </div>
         <div className="stat-box">
+          <span className="stat-label">Flex Balance</span>
+          <span className="stat-value">{address ? fmt(userFlexBalance) : '—'} <TokenIcon symbol={stkSymbol} />{stkSymbol}</span>
+        </div>
+        <div className="stat-box">
+          <span className="stat-label">Locked Balance</span>
+          <span className="stat-value">{address ? fmt(userLockedBalance) : '—'} <TokenIcon symbol={stkSymbol} />{stkSymbol}</span>
+        </div>
+        <div className="stat-box" title="Total claimable rewards across all positions">
+          <span className="stat-label">Claimable</span>
+          <span className="stat-value highlight-green" style={{ fontSize: 13, wordBreak: 'break-all' }}>
+            {address ? fmtRwdExact(earnedRaw) : '—'} <TokenIcon symbol={rwdSymbol} />{rwdSymbol}
+          </span>
+        </div>
+      </div>
+
+      {/* Claim All button */}
+      <div className="input-group" style={{ marginTop: 12 }}>
+        <button className="btn-green" onClick={handleClaim} disabled={!address || busy || isOnWrongChain}>
+          Claim All Rewards
+        </button>
+        <div className="stat-box" style={{ padding: '4px 8px', fontSize: 12 }}>
           <span className="stat-label">Wallet</span>
           <span className="stat-value">{address ? fmt(tokenBalance) : '—'} <TokenIcon symbol={stkSymbol} />{stkSymbol}</span>
         </div>
       </div>
 
-      <div className="input-group" style={{ marginTop: 16 }}>
-        <input type="text" placeholder="Amount to stake" value={stakeAmount} onChange={(e) => setStakeAmount(e.target.value)} disabled={!address} />
-        {needsApproval ? (
-          <button onClick={handleApprove} disabled={!address || busy || isOnWrongChain}>Approve</button>
-        ) : (
-          <button onClick={handleStake} disabled={!address || busy || isOnWrongChain || !stakeAmount}>Stake</button>
-        )}
+      {/* Tabs */}
+      <div style={{ display: 'flex', gap: 0, marginTop: 20, borderBottom: '2px solid rgba(255,255,255,0.1)' }}>
+        {['flex', 'lock'].map((t) => (
+          <button
+            key={t}
+            onClick={() => setTab(t)}
+            style={{
+              flex: 1,
+              padding: '10px 16px',
+              background: tab === t ? 'rgba(255,255,255,0.08)' : 'transparent',
+              border: 'none',
+              borderBottom: tab === t ? '2px solid var(--blue, #3b82f6)' : '2px solid transparent',
+              color: tab === t ? '#fff' : 'rgba(255,255,255,0.5)',
+              cursor: 'pointer',
+              fontWeight: tab === t ? 600 : 400,
+              fontSize: 14,
+              textTransform: 'capitalize',
+            }}
+          >
+            {t === 'flex' ? 'Flex Stake (1x)' : 'Lock Stake (1.5x–10x)'}
+          </button>
+        ))}
       </div>
 
-      <div className="input-group">
-        <input type="text" placeholder="Amount to withdraw" value={withdrawAmount} onChange={(e) => setWithdrawAmount(e.target.value)} disabled={!address} />
-        <button onClick={handleWithdraw} disabled={!address || busy || isOnWrongChain || !withdrawAmount || voteLocked}>Withdraw</button>
-      </div>
+      {/* Flex Tab */}
+      {tab === 'flex' && (
+        <div style={{ marginTop: 16 }}>
+          <p className="help-text" style={{ marginBottom: 12 }}>
+            Flex staking: 1x multiplier, withdraw anytime with a 1% fee to the DAO treasury.
+          </p>
 
-      <div className="input-group">
-        <button className="btn-green" onClick={handleClaim} disabled={!address || busy || isOnWrongChain}>Claim Rewards</button>
-        <button className="btn-red" onClick={handleExit} disabled={!address || busy || isOnWrongChain || voteLocked}>Exit (Withdraw All + Claim)</button>
-      </div>
+          <div className="input-group">
+            <input
+              type="text"
+              placeholder="Amount to stake"
+              value={stakeAmount}
+              onChange={(e) => setStakeAmount(e.target.value)}
+              disabled={!address}
+            />
+            {needsApproval ? (
+              <button onClick={handleApprove} disabled={!address || busy || isOnWrongChain}>Approve</button>
+            ) : (
+              <button onClick={handleStake} disabled={!address || busy || isOnWrongChain || !stakeAmount}>Stake</button>
+            )}
+          </div>
 
+          <div className="input-group">
+            <input
+              type="text"
+              placeholder="Amount to withdraw (1% fee)"
+              value={withdrawAmount}
+              onChange={(e) => setWithdrawAmount(e.target.value)}
+              disabled={!address}
+            />
+            <button onClick={handleWithdraw} disabled={!address || busy || isOnWrongChain || !withdrawAmount || voteLocked}>
+              Withdraw
+            </button>
+          </div>
+
+          <div className="input-group">
+            <button className="btn-red" onClick={handleExit} disabled={!address || busy || isOnWrongChain || voteLocked}>
+              Exit (Withdraw All Flex + Claim)
+            </button>
+          </div>
+
+          {withdrawAmount && (
+            <p className="help-text" style={{ marginTop: 4, color: '#eab308', fontSize: 12 }}>
+              1% withdraw fee: ~{(() => {
+                try { return Number(formatEther(parseEther(withdrawAmount) / 100n)).toLocaleString(undefined, { maximumFractionDigits: 4 }); }
+                catch { return '?'; }
+              })()} {stkSymbol} goes to DAO treasury.
+            </p>
+          )}
+        </div>
+      )}
+
+      {/* Lock Tab */}
+      {tab === 'lock' && (
+        <div style={{ marginTop: 16 }}>
+          <p className="help-text" style={{ marginBottom: 12 }}>
+            Lock staking: higher reward multiplier. Early unlock incurs a 30% penalty
+            (69% to stakers, 20% burned, 10% DAO, 1% dev).
+          </p>
+
+          {/* Tier Selector */}
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 12 }}>
+            {LOCK_TIERS.map((tier, i) => (
+              <button
+                key={tier.duration}
+                onClick={() => setSelectedTier(i)}
+                style={{
+                  padding: '6px 12px',
+                  fontSize: 12,
+                  borderRadius: 6,
+                  border: selectedTier === i ? '2px solid var(--blue, #3b82f6)' : '1px solid rgba(255,255,255,0.2)',
+                  background: selectedTier === i ? 'rgba(59,130,246,0.15)' : 'transparent',
+                  color: selectedTier === i ? '#fff' : 'rgba(255,255,255,0.6)',
+                  cursor: 'pointer',
+                }}
+              >
+                {tier.label} ({tier.multiplier})
+              </button>
+            ))}
+          </div>
+
+          <div className="input-group">
+            <input
+              type="text"
+              placeholder={`Amount to lock for ${LOCK_TIERS[selectedTier].label}`}
+              value={lockAmount}
+              onChange={(e) => setLockAmount(e.target.value)}
+              disabled={!address}
+            />
+            {needsApproval ? (
+              <button onClick={handleApprove} disabled={!address || busy || isOnWrongChain}>Approve</button>
+            ) : (
+              <button onClick={handleStakeLocked} disabled={!address || busy || isOnWrongChain || !lockAmount}>
+                Lock Stake ({LOCK_TIERS[selectedTier].multiplier})
+              </button>
+            )}
+          </div>
+
+          {lockAmount && (
+            <p className="help-text" style={{ marginTop: 4, fontSize: 12 }}>
+              Effective weight: {(() => {
+                try {
+                  const amt = Number(formatEther(parseEther(lockAmount)));
+                  const mult = LOCK_TIERS[selectedTier].bps / 10000;
+                  return (amt * mult).toLocaleString(undefined, { maximumFractionDigits: 4 });
+                } catch { return '?'; }
+              })()} eff | Unlock: {LOCK_TIERS[selectedTier].label} | Early penalty: 30%
+            </p>
+          )}
+
+          {/* Active Locks Table */}
+          {userLocks && userLocks.length > 0 && (
+            <div style={{ marginTop: 16 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                <h4 style={{ margin: 0 }}>Active Locks ({userLocks.length})</h4>
+                {hasExpiredLocks && (
+                  <button
+                    className="btn-green"
+                    onClick={handleUnlockAllExpired}
+                    disabled={!address || busy || isOnWrongChain || voteLocked}
+                    style={{ fontSize: 12, padding: '4px 10px' }}
+                  >
+                    Unlock All Expired
+                  </button>
+                )}
+              </div>
+              <div style={{ overflowX: 'auto' }}>
+                <table style={{ width: '100%', fontSize: 12, borderCollapse: 'collapse' }}>
+                  <thead>
+                    <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.1)', textAlign: 'left' }}>
+                      <th style={{ padding: '6px 8px' }}>#</th>
+                      <th style={{ padding: '6px 8px' }}>Amount</th>
+                      <th style={{ padding: '6px 8px' }}>Mult</th>
+                      <th style={{ padding: '6px 8px' }}>Effective</th>
+                      <th style={{ padding: '6px 8px' }}>Time Left</th>
+                      <th style={{ padding: '6px 8px' }}>Action</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {userLocks.map((lk, i) => {
+                      const expired = Number(lk.unlockTime) <= now;
+                      const mult = Number(lk.multiplier) / 10000;
+                      const eff = Number(formatEther(lk.amount)) * mult;
+                      return (
+                        <tr key={i} style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+                          <td style={{ padding: '6px 8px' }}>{i}</td>
+                          <td style={{ padding: '6px 8px' }}>{fmt(lk.amount)}</td>
+                          <td style={{ padding: '6px 8px' }}>{mult}x</td>
+                          <td style={{ padding: '6px 8px' }}>{eff.toLocaleString(undefined, { maximumFractionDigits: 2 })}</td>
+                          <td style={{ padding: '6px 8px', color: expired ? '#22c55e' : '#eab308' }}>
+                            {expired ? 'Expired' : formatDaysRemaining(lk.unlockTime, now)}
+                          </td>
+                          <td style={{ padding: '6px 8px' }}>
+                            <button
+                              onClick={() => handleUnlock(i)}
+                              disabled={!address || busy || isOnWrongChain || voteLocked}
+                              style={{
+                                fontSize: 11,
+                                padding: '3px 8px',
+                                cursor: 'pointer',
+                                background: expired ? 'rgba(34,197,94,0.15)' : 'rgba(220,38,38,0.15)',
+                                color: expired ? '#22c55e' : '#ef4444',
+                                border: `1px solid ${expired ? 'rgba(34,197,94,0.3)' : 'rgba(220,38,38,0.3)'}`,
+                                borderRadius: 4,
+                              }}
+                              title={expired ? 'Unlock expired position (full return)' : 'Early unlock: 30% penalty'}
+                            >
+                              {expired ? 'Unlock' : 'Early Unlock (30%)'}
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Warnings */}
       {voteLocked && (
         <p
           className="help-text"
@@ -452,8 +643,7 @@ export default function Staking() {
       )}
       {address && isOnWrongChain && (
         <p className="help-text" style={{ marginTop: 8, color: 'var(--danger, #c33)' }}>
-          Switch your wallet to PulseChain (369) to stake. Currently on{' '}
-          {chain.chainName || 'an unknown chain'}.
+          Switch your wallet to PulseChain (369) to stake.
         </p>
       )}
       {isSimulating && (
@@ -474,7 +664,6 @@ export default function Staking() {
             color: 'var(--danger, #c33)',
             wordBreak: 'break-word',
           }}
-          title="Error from simulation / wallet / on-chain revert"
         >
           ⚠ {prettyError(txError)}
         </p>
