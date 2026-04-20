@@ -253,8 +253,19 @@ contract StakingVault is IStakingVault, Ownable, ReentrancyGuard {
 
     function earned(address account) public view returns (uint256) {
         uint256 currentRPT = rewardPerToken();
-        uint256 eff = _userEffectiveBalance[account];
-        return (eff * (currentRPT - userRewardPerTokenPaid[account])) / PRECISION + rewards[account];
+        // Flex earnings
+        uint256 flexEff = _flexBalance[account]; // 1x = amount itself
+        uint256 total = (flexEff * (currentRPT - userRewardPerTokenPaid[account])) / PRECISION;
+        total += rewards[account];
+        // Lock earnings
+        LockPosition[] storage locks = _locks[account];
+        for (uint256 i; i < locks.length;) {
+            uint256 lockEff = (locks[i].amount * locks[i].multiplier) / BPS;
+            total += (lockEff * (currentRPT - locks[i].rewardPerTokenPaid)) / PRECISION;
+            total += locks[i].pendingRewards;
+            unchecked { ++i; }
+        }
+        return total;
     }
 
     function getRewardForDuration() external view returns (uint256) {
@@ -281,11 +292,9 @@ contract StakingVault is IStakingVault, Ownable, ReentrancyGuard {
     function pendingRewardForLock(address user, uint256 lockId) external view returns (uint256) {
         if (lockId >= _locks[user].length) revert InvalidLockId();
         LockPosition storage lk = _locks[user][lockId];
-        uint256 totalEarned = earned(user);
-        uint256 eff = _userEffectiveBalance[user];
-        if (eff == 0) return 0;
+        uint256 currentRPT = rewardPerToken();
         uint256 lockEff = (lk.amount * lk.multiplier) / BPS;
-        return (totalEarned * lockEff) / eff;
+        return (lockEff * (currentRPT - lk.rewardPerTokenPaid)) / PRECISION + lk.pendingRewards;
     }
 
     function getMultiplierForDuration(uint256 duration) public pure returns (uint256) {
@@ -362,9 +371,20 @@ contract StakingVault is IStakingVault, Ownable, ReentrancyGuard {
 
     function getReward() public nonReentrant autoProcess updateReward(msg.sender) {
         uint256 reward = rewards[msg.sender];
+        // Collect pending rewards from all locks
+        LockPosition[] storage locks = _locks[msg.sender];
+        for (uint256 i; i < locks.length;) {
+            reward += locks[i].pendingRewards;
+            locks[i].pendingRewards = 0;
+            unchecked { ++i; }
+        }
         if (reward > 0) {
             rewards[msg.sender] = 0;
-            totalOwed = totalOwed > reward ? totalOwed - reward : 0;
+            if (reward > totalOwed) {
+                totalOwed = 0;
+            } else {
+                totalOwed -= reward;
+            }
             REWARDS_TOKEN.safeTransfer(msg.sender, reward);
             emit RewardPaid(msg.sender, reward);
         }
@@ -396,7 +416,9 @@ contract StakingVault is IStakingVault, Ownable, ReentrancyGuard {
             lockTime: block.timestamp,
             unlockTime: block.timestamp + duration,
             duration: duration,
-            multiplier: multiplier
+            multiplier: multiplier,
+            rewardPerTokenPaid: rewardPerTokenStored,
+            pendingRewards: 0
         }));
 
         uint256 effectiveDelta = (amount * multiplier) / BPS;
@@ -437,6 +459,9 @@ contract StakingVault is IStakingVault, Ownable, ReentrancyGuard {
             LockPosition storage lk = locks[id];
             uint256 amount = lk.amount;
             uint256 effectiveDelta = (amount * lk.multiplier) / BPS;
+
+            // Collect any pending lock rewards into user rewards
+            rewards[msg.sender] += lk.pendingRewards;
 
             // Accounting
             _totalRawSupply -= amount;
@@ -874,16 +899,29 @@ contract StakingVault is IStakingVault, Ownable, ReentrancyGuard {
     // Internal — reward materialization
     // -------------------------------------------------------------------------
 
-    /// @dev Materializes pending rewards using the user's cached effective balance.
-    ///      O(1) — no per-lock loop. Called from the updateReward modifier.
+    /// @dev Materializes pending rewards for the user's flex balance and all locks.
+    ///      Updates each position's rewardPerTokenPaid snapshot and accumulates
+    ///      pending rewards. Called from the updateReward modifier.
     function _materializeRewards(address account) internal {
         uint256 currentRPT = rewardPerTokenStored;
-        uint256 delta = currentRPT - userRewardPerTokenPaid[account];
-        if (delta > 0) {
-            uint256 eff = _userEffectiveBalance[account];
-            rewards[account] += (eff * delta) / PRECISION;
+
+        // Flex rewards — flex effective = flex balance (1x)
+        uint256 flexEff = _flexBalance[account];
+        if (flexEff > 0) {
+            rewards[account] +=
+                (flexEff * (currentRPT - userRewardPerTokenPaid[account])) / PRECISION;
         }
         userRewardPerTokenPaid[account] = currentRPT;
+
+        // Lock rewards
+        LockPosition[] storage locks = _locks[account];
+        for (uint256 i; i < locks.length;) {
+            uint256 lockEff = (locks[i].amount * locks[i].multiplier) / BPS;
+            locks[i].pendingRewards +=
+                (lockEff * (currentRPT - locks[i].rewardPerTokenPaid)) / PRECISION;
+            locks[i].rewardPerTokenPaid = currentRPT;
+            unchecked { ++i; }
+        }
     }
 
     // -------------------------------------------------------------------------

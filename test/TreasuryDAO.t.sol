@@ -257,7 +257,7 @@ contract TreasuryDAOTest is Test {
     }
 
     function test_constructor_revertsZeroVault() public {
-        vm.expectRevert("zero vault");
+        vm.expectRevert(TreasuryDAO.ZeroVault.selector);
         new TreasuryDAO(address(0), address(cabalToken), address(wplsToken), address(mockRouter));
     }
 
@@ -267,12 +267,12 @@ contract TreasuryDAOTest is Test {
     }
 
     function test_constructor_revertsZeroWpls() public {
-        vm.expectRevert("zero wpls");
+        vm.expectRevert(TreasuryDAO.ZeroWPLS.selector);
         new TreasuryDAO(address(vault), address(cabalToken), address(0), address(mockRouter));
     }
 
     function test_constructor_revertsZeroRouter() public {
-        vm.expectRevert("zero router");
+        vm.expectRevert(TreasuryDAO.ZeroRouter.selector);
         new TreasuryDAO(address(vault), address(cabalToken), address(wplsToken), address(0));
     }
 
@@ -325,38 +325,38 @@ contract TreasuryDAOTest is Test {
 
     function test_propose_revertsNonTopStaker() public {
         vm.prank(nonStaker);
-        vm.expectRevert("not top staker");
+        vm.expectRevert(TreasuryDAO.NotTopStaker.selector);
         dao.propose(100e18, bob, "send funds", ITreasuryDAO.ActionType.SendPLS, address(0), "");
     }
 
     function test_propose_revertsBelowMinAmount() public {
         vm.prank(alice);
-        vm.expectRevert("below min amount");
+        vm.expectRevert(TreasuryDAO.BelowMinAmount.selector);
         dao.propose(0, bob, "send funds", ITreasuryDAO.ActionType.SendPLS, address(0), "");
     }
 
     function test_propose_revertsAboveMaxAmount() public {
         vm.deal(address(dao), 200_000_000 ether);
         vm.prank(alice);
-        vm.expectRevert("above max amount");
+        vm.expectRevert(TreasuryDAO.AboveMaxAmount.selector);
         dao.propose(100_000_001 ether, bob, "too much", ITreasuryDAO.ActionType.SendPLS, address(0), "");
     }
 
     function test_propose_revertsEmptyDescription() public {
         vm.prank(alice);
-        vm.expectRevert("empty description");
+        vm.expectRevert(TreasuryDAO.EmptyDescription.selector);
         dao.propose(100e18, bob, "", ITreasuryDAO.ActionType.SendPLS, address(0), "");
     }
 
     function test_propose_revertsZeroTarget() public {
         vm.prank(alice);
-        vm.expectRevert("target required");
+        vm.expectRevert(TreasuryDAO.TargetRequired.selector);
         dao.propose(100e18, address(0), "send funds", ITreasuryDAO.ActionType.SendPLS, address(0), "");
     }
 
     function test_propose_revertsInsufficientBalance() public {
         vm.prank(alice);
-        vm.expectRevert("insufficient available balance");
+        vm.expectRevert(TreasuryDAO.InsufficientAvailableBalance.selector);
         dao.propose(2000e18, bob, "too much", ITreasuryDAO.ActionType.SendPLS, address(0), "");
     }
 
@@ -382,7 +382,7 @@ contract TreasuryDAOTest is Test {
         dao.propose(100e18, bob, "first", ITreasuryDAO.ActionType.SendPLS, address(0), "");
 
         vm.prank(alice);
-        vm.expectRevert("one active proposal per proposer");
+        vm.expectRevert(TreasuryDAO.OneActiveProposalPerProposer.selector);
         dao.propose(100e18, bob, "second", ITreasuryDAO.ActionType.SendPLS, address(0), "");
     }
 
@@ -454,7 +454,7 @@ contract TreasuryDAOTest is Test {
         dao.castVote(id, true);
 
         vm.prank(alice);
-        vm.expectRevert("already voted");
+        vm.expectRevert(TreasuryDAO.AlreadyVoted.selector);
         dao.castVote(id, true);
     }
 
@@ -462,13 +462,13 @@ contract TreasuryDAOTest is Test {
         uint256 id = _propose(alice, 100e18, bob, "spend");
 
         vm.prank(nonStaker);
-        vm.expectRevert("no voting power");
+        vm.expectRevert(TreasuryDAO.NoVotingPower.selector);
         dao.castVote(id, true);
     }
 
     function test_castVote_revertsInvalidProposal() public {
         vm.prank(alice);
-        vm.expectRevert("invalid proposal");
+        vm.expectRevert(TreasuryDAO.InvalidProposal.selector);
         dao.castVote(999, true);
     }
 
@@ -477,7 +477,7 @@ contract TreasuryDAOTest is Test {
         vm.warp(block.timestamp + 7 days + 1);
 
         vm.prank(alice);
-        vm.expectRevert("voting not active");
+        vm.expectRevert(TreasuryDAO.VotingNotActive.selector);
         dao.castVote(id, true);
     }
 
@@ -678,7 +678,7 @@ contract TreasuryDAOTest is Test {
     }
 
     function test_state_revertsInvalidId() public {
-        vm.expectRevert("invalid proposal");
+        vm.expectRevert(TreasuryDAO.InvalidProposal.selector);
         dao.state(999);
     }
 
@@ -711,19 +711,19 @@ contract TreasuryDAOTest is Test {
 
     function test_execute_revertsNotSucceeded() public {
         uint256 id = _propose(alice, 100e18, bob, "spend");
-        vm.expectRevert("not succeeded");
+        vm.expectRevert(TreasuryDAO.NotSucceeded.selector);
         dao.executeProposal(id);
     }
 
     function test_execute_revertsAlreadyExecuted() public {
         uint256 id = _proposeAndPass(50e18, bob, "spend");
         dao.executeProposal(id);
-        vm.expectRevert("not succeeded");
+        vm.expectRevert(TreasuryDAO.NotSucceeded.selector);
         dao.executeProposal(id);
     }
 
     function test_execute_revertsInvalidId() public {
-        vm.expectRevert("invalid proposal");
+        vm.expectRevert(TreasuryDAO.InvalidProposal.selector);
         dao.executeProposal(999);
     }
 
@@ -744,7 +744,7 @@ contract TreasuryDAOTest is Test {
 
     function test_unlockDefeated_revertsNotDefeated() public {
         uint256 id = _propose(alice, 100e18, bob, "spend");
-        vm.expectRevert("not defeated");
+        vm.expectRevert(TreasuryDAO.NotDefeated.selector);
         dao.unlockDefeated(id);
     }
 
@@ -752,7 +752,7 @@ contract TreasuryDAOTest is Test {
         uint256 id = _propose(alice, 100e18, bob, "spend");
         vm.warp(block.timestamp + 7 days + 1);
         dao.unlockDefeated(id);
-        vm.expectRevert("already unlocked");
+        vm.expectRevert(TreasuryDAO.AlreadyUnlocked.selector);
         dao.unlockDefeated(id);
     }
 
@@ -784,7 +784,7 @@ contract TreasuryDAOTest is Test {
     }
 
     function test_setStakingVault_revertsZero() public {
-        vm.expectRevert("zero address");
+        vm.expectRevert(TreasuryDAO.ZeroAddress.selector);
         dao.setStakingVault(address(0));
     }
 
@@ -800,12 +800,12 @@ contract TreasuryDAOTest is Test {
     }
 
     function test_setVotingPeriod_revertsTooLow() public {
-        vm.expectRevert("out of range");
+        vm.expectRevert(TreasuryDAO.OutOfRange.selector);
         dao.setVotingPeriod(0);
     }
 
     function test_setVotingPeriod_revertsTooHigh() public {
-        vm.expectRevert("out of range");
+        vm.expectRevert(TreasuryDAO.OutOfRange.selector);
         dao.setVotingPeriod(31 days);
     }
 
@@ -815,7 +815,7 @@ contract TreasuryDAOTest is Test {
     }
 
     function test_setMinVoters_revertsZero() public {
-        vm.expectRevert("zero voters");
+        vm.expectRevert(TreasuryDAO.ZeroVoters.selector);
         dao.setMinVoters(0);
     }
 
@@ -825,12 +825,12 @@ contract TreasuryDAOTest is Test {
     }
 
     function test_setSupermajorityPct_revertsTooLow() public {
-        vm.expectRevert("out of range");
+        vm.expectRevert(TreasuryDAO.OutOfRange.selector);
         dao.setSupermajorityPct(50);
     }
 
     function test_setSupermajorityPct_revertsTooHigh() public {
-        vm.expectRevert("out of range");
+        vm.expectRevert(TreasuryDAO.OutOfRange.selector);
         dao.setSupermajorityPct(101);
     }
 
@@ -840,7 +840,7 @@ contract TreasuryDAOTest is Test {
     }
 
     function test_setMaxProposalAmount_revertsBelowMin() public {
-        vm.expectRevert("max < min");
+        vm.expectRevert(TreasuryDAO.MaxBelowMin.selector);
         dao.setMaxProposalAmount(0);
     }
 
@@ -850,7 +850,7 @@ contract TreasuryDAOTest is Test {
     }
 
     function test_setMinProposalAmount_revertsZero() public {
-        vm.expectRevert("invalid min");
+        vm.expectRevert(TreasuryDAO.InvalidMin.selector);
         dao.setMinProposalAmount(0);
     }
 
@@ -861,7 +861,7 @@ contract TreasuryDAOTest is Test {
     }
 
     function test_setDexRouter_revertsZero() public {
-        vm.expectRevert("zero address");
+        vm.expectRevert(TreasuryDAO.ZeroAddress.selector);
         dao.setDexRouter(address(0));
     }
 
@@ -872,7 +872,7 @@ contract TreasuryDAOTest is Test {
     }
 
     function test_setToken_revertsZero() public {
-        vm.expectRevert("zero address");
+        vm.expectRevert(TreasuryDAO.ZeroAddress.selector);
         dao.setToken(address(0));
     }
 
@@ -986,7 +986,7 @@ contract TreasuryDAOTest is Test {
     }
 
     function test_proposals_revertsInvalidId() public {
-        vm.expectRevert("invalid proposal");
+        vm.expectRevert(TreasuryDAO.InvalidProposal.selector);
         dao.proposals(42);
     }
 
@@ -997,14 +997,14 @@ contract TreasuryDAOTest is Test {
     function test_execute_cannotReExecuteAfterStateSetToExecuted() public {
         uint256 id = _proposeAndPass(50e18, bob, "spend");
         dao.executeProposal(id);
-        vm.expectRevert("not succeeded");
+        vm.expectRevert(TreasuryDAO.NotSucceeded.selector);
         dao.executeProposal(id);
     }
 
     function test_unlockDefeated_cannotBeCalledOnExecuted() public {
         uint256 id = _proposeAndPass(50e18, bob, "spend");
         dao.executeProposal(id);
-        vm.expectRevert("not defeated");
+        vm.expectRevert(TreasuryDAO.NotDefeated.selector);
         dao.unlockDefeated(id);
     }
 
@@ -1012,7 +1012,7 @@ contract TreasuryDAOTest is Test {
         uint256 id = _propose(alice, 100e18, bob, "spend");
         vm.warp(block.timestamp + 7 days + 1);
         dao.unlockDefeated(id);
-        vm.expectRevert("not succeeded");
+        vm.expectRevert(TreasuryDAO.NotSucceeded.selector);
         dao.executeProposal(id);
     }
 
@@ -1066,7 +1066,7 @@ contract TreasuryDAOTest is Test {
         assertEq(dao.lockedAmount(), 100e18);
 
         vm.prank(alice);
-        vm.expectRevert("no voting power");
+        vm.expectRevert(TreasuryDAO.NoVotingPower.selector);
         dao.castVote(id, true);
     }
 
@@ -1081,7 +1081,7 @@ contract TreasuryDAOTest is Test {
         dao.castVote(id, true);
 
         vm.prank(alice);
-        vm.expectRevert("StakingVault: tokens locked by active vote");
+        vm.expectRevert(StakingVault.TokensVoteLocked.selector);
         vault.withdraw(10e18);
     }
 
@@ -1113,7 +1113,7 @@ contract TreasuryDAOTest is Test {
 
         // Still locked -- proposal 2 hasn't ended yet
         vm.prank(alice);
-        vm.expectRevert("StakingVault: tokens locked by active vote");
+        vm.expectRevert(StakingVault.TokensVoteLocked.selector);
         vault.withdraw(10e18);
 
         // Past proposal 2 end
@@ -1126,7 +1126,7 @@ contract TreasuryDAOTest is Test {
 
     function test_voteLock_nonDaoCannotCallLockForVote() public {
         vm.prank(alice);
-        vm.expectRevert("StakingVault: caller is not DAO");
+        vm.expectRevert(StakingVault.NotDAO.selector);
         vault.lockForVote(alice, block.timestamp + 7 days);
     }
 
@@ -1136,7 +1136,7 @@ contract TreasuryDAOTest is Test {
         dao.castVote(id, true);
 
         vm.prank(alice);
-        vm.expectRevert("StakingVault: tokens locked by active vote");
+        vm.expectRevert(StakingVault.TokensVoteLocked.selector);
         vault.exit();
     }
 
@@ -1213,13 +1213,13 @@ contract TreasuryDAOTest is Test {
 
     function test_buyAndBurn_propose_revertsNoActionToken() public {
         vm.prank(alice);
-        vm.expectRevert("actionToken required");
+        vm.expectRevert(TreasuryDAO.ActionTokenRequired.selector);
         dao.propose(100e18, address(0), "buy and burn", ITreasuryDAO.ActionType.BuyAndBurn, address(0), "");
     }
 
     function test_buyAndBurn_propose_revertsWPLSasActionToken() public {
         vm.prank(alice);
-        vm.expectRevert("actionToken cannot be WPLS");
+        vm.expectRevert(TreasuryDAO.ActionTokenCannotBeWPLS.selector);
         dao.propose(100e18, address(0), "buy wpls", ITreasuryDAO.ActionType.BuyAndBurn, address(wplsToken), "");
     }
 
@@ -1281,7 +1281,7 @@ contract TreasuryDAOTest is Test {
 
     function test_addAndBurnLP_propose_revertsNoActionToken() public {
         vm.prank(alice);
-        vm.expectRevert("actionToken required");
+        vm.expectRevert(TreasuryDAO.ActionTokenRequired.selector);
         dao.propose(100e18, address(0), "add LP", ITreasuryDAO.ActionType.AddAndBurnLP, address(0), "");
     }
 
@@ -1330,13 +1330,13 @@ contract TreasuryDAOTest is Test {
 
     function test_custom_propose_revertsNoTarget() public {
         vm.prank(alice);
-        vm.expectRevert("target required");
+        vm.expectRevert(TreasuryDAO.TargetRequired.selector);
         dao.propose(50e18, address(0), "custom", ITreasuryDAO.ActionType.Custom, address(0), hex"01");
     }
 
     function test_custom_propose_revertsNoData() public {
         vm.prank(alice);
-        vm.expectRevert("data required");
+        vm.expectRevert(TreasuryDAO.DataRequired.selector);
         dao.propose(50e18, bob, "custom", ITreasuryDAO.ActionType.Custom, address(0), "");
     }
 
@@ -1392,7 +1392,7 @@ contract TreasuryDAOTest is Test {
             ITreasuryDAO.ActionType.Custom, address(0), data
         );
 
-        vm.expectRevert("custom call failed");
+        vm.expectRevert(TreasuryDAO.CustomCallFailed.selector);
         dao.executeProposal(id);
     }
 
@@ -1402,13 +1402,13 @@ contract TreasuryDAOTest is Test {
 
     function test_buyAndBurn_propose_revertsBelowMin() public {
         vm.prank(alice);
-        vm.expectRevert("below min amount");
+        vm.expectRevert(TreasuryDAO.BelowMinAmount.selector);
         dao.propose(0, address(0), "buy", ITreasuryDAO.ActionType.BuyAndBurn, address(burnToken), "");
     }
 
     function test_addAndBurnLP_propose_revertsBelowMin() public {
         vm.prank(alice);
-        vm.expectRevert("below min amount");
+        vm.expectRevert(TreasuryDAO.BelowMinAmount.selector);
         dao.propose(0, address(0), "lp", ITreasuryDAO.ActionType.AddAndBurnLP, address(burnToken), "");
     }
 
@@ -1500,24 +1500,24 @@ contract TreasuryDAOTest is Test {
     }
 
     function test_addPreset_revertsEmptyName() public {
-        vm.expectRevert("empty name");
+        vm.expectRevert(TreasuryDAO.EmptyName.selector);
         dao.addPreset("", ITreasuryDAO.ActionType.BuyAndBurn, address(burnToken), address(0), "");
     }
 
     function test_addPreset_validatesPerType() public {
         // BuyAndBurn requires actionToken
-        vm.expectRevert("actionToken required");
+        vm.expectRevert(TreasuryDAO.ActionTokenRequired.selector);
         dao.addPreset("bad", ITreasuryDAO.ActionType.BuyAndBurn, address(0), address(0), "");
 
         // SendWPLS requires target
-        vm.expectRevert("target required");
+        vm.expectRevert(TreasuryDAO.TargetRequired.selector);
         dao.addPreset("bad", ITreasuryDAO.ActionType.SendPLS, address(0), address(0), "");
 
         // Custom requires target + data
-        vm.expectRevert("target required");
+        vm.expectRevert(TreasuryDAO.TargetRequired.selector);
         dao.addPreset("bad", ITreasuryDAO.ActionType.Custom, address(0), address(0), hex"01");
 
-        vm.expectRevert("data required");
+        vm.expectRevert(TreasuryDAO.DataRequired.selector);
         dao.addPreset("bad", ITreasuryDAO.ActionType.Custom, address(0), bob, "");
     }
 
@@ -1533,7 +1533,7 @@ contract TreasuryDAOTest is Test {
     }
 
     function test_removePreset_revertsInvalidId() public {
-        vm.expectRevert("invalid preset");
+        vm.expectRevert(TreasuryDAO.InvalidPreset.selector);
         dao.removePreset(99);
     }
 
@@ -1541,7 +1541,7 @@ contract TreasuryDAOTest is Test {
         dao.addPreset("test", ITreasuryDAO.ActionType.BuyAndBurn, address(burnToken), address(0), "");
         dao.removePreset(1);
 
-        vm.expectRevert("already removed");
+        vm.expectRevert(TreasuryDAO.AlreadyRemoved.selector);
         dao.removePreset(1);
     }
 
@@ -1569,7 +1569,7 @@ contract TreasuryDAOTest is Test {
     }
 
     function test_getPreset_revertsInvalidId() public {
-        vm.expectRevert("invalid preset");
+        vm.expectRevert(TreasuryDAO.InvalidPreset.selector);
         dao.getPreset(1);
     }
 
@@ -1608,13 +1608,13 @@ contract TreasuryDAOTest is Test {
         dao.removePreset(1);
 
         vm.prank(alice);
-        vm.expectRevert("preset not active");
+        vm.expectRevert(TreasuryDAO.PresetNotActive.selector);
         dao.proposeFromPreset(1, 100e18, "should fail");
     }
 
     function test_proposeFromPreset_revertsInvalidPresetId() public {
         vm.prank(alice);
-        vm.expectRevert("invalid preset");
+        vm.expectRevert(TreasuryDAO.InvalidPreset.selector);
         dao.proposeFromPreset(99, 100e18, "should fail");
     }
 
@@ -1622,7 +1622,7 @@ contract TreasuryDAOTest is Test {
         dao.addPreset("test", ITreasuryDAO.ActionType.BuyAndBurn, address(burnToken), address(0), "");
 
         vm.prank(nonStaker);
-        vm.expectRevert("not top staker");
+        vm.expectRevert(TreasuryDAO.NotTopStaker.selector);
         dao.proposeFromPreset(1, 100e18, "should fail");
     }
 

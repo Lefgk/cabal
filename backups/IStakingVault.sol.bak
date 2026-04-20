@@ -9,6 +9,8 @@ interface IStakingVault {
         uint256 unlockTime;
         uint256 duration;
         uint256 multiplier;      // BPS (10000 = 1x)
+        uint256 rewardPerTokenPaid;
+        uint256 pendingRewards;
     }
 
     // --- Events ---

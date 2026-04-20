@@ -17,6 +17,43 @@ contract TreasuryDAO is ITreasuryDAO, Ownable, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
     // ---------------------------------------------------------------
+    //  Custom errors
+    // ---------------------------------------------------------------
+
+    error ZeroVault();
+    error ZeroWPLS();
+    error ZeroRouter();
+    error InvalidPreset();
+    error PresetNotActive();
+    error NotTopStaker();
+    error EmptyDescription();
+    error TargetRequired();
+    error BelowMinAmount();
+    error AboveMaxAmount();
+    error ActionTokenRequired();
+    error ActionTokenCannotBeWPLS();
+    error DataRequired();
+    error OneActiveProposalPerProposer();
+    error InsufficientAvailableBalance();
+    error InvalidProposal();
+    error VotingNotActive();
+    error AlreadyVoted();
+    error NoVotingPower();
+    error MustStakeBeforeVoting();
+    error NotSucceeded();
+    error NotDefeated();
+    error AlreadyUnlocked();
+    error PLSTransferFailed();
+    error CustomCallFailed();
+    error ZeroAddress();
+    error OutOfRange();
+    error ZeroVoters();
+    error MaxBelowMin();
+    error InvalidMin();
+    error EmptyName();
+    error AlreadyRemoved();
+
+    // ---------------------------------------------------------------
     //  Constants
     // ---------------------------------------------------------------
 
@@ -64,9 +101,9 @@ contract TreasuryDAO is ITreasuryDAO, Ownable, ReentrancyGuard {
         address _wpls,
         address _dexRouter
     ) Ownable(msg.sender) {
-        require(_stakingVault != address(0), "zero vault");
-        require(_wpls != address(0), "zero wpls");
-        require(_dexRouter != address(0), "zero router");
+        if (_stakingVault == address(0)) revert ZeroVault();
+        if (_wpls == address(0)) revert ZeroWPLS();
+        if (_dexRouter == address(0)) revert ZeroRouter();
 
         stakingVault = IStakingVault(_stakingVault);
         token = _token;
@@ -114,9 +151,9 @@ contract TreasuryDAO is ITreasuryDAO, Ownable, ReentrancyGuard {
         uint256 amount,
         string calldata description
     ) external override returns (uint256) {
-        require(presetId >= 1 && presetId <= presetCount, "invalid preset");
+        if (presetId < 1 || presetId > presetCount) revert InvalidPreset();
         Preset storage preset = _presets[presetId];
-        require(preset.active, "preset not active");
+        if (!preset.active) revert PresetNotActive();
 
         return _propose(amount, preset.target, description, preset.actionType, preset.actionToken, preset.data);
     }
@@ -130,33 +167,33 @@ contract TreasuryDAO is ITreasuryDAO, Ownable, ReentrancyGuard {
         address actionToken,
         bytes memory data
     ) internal returns (uint256) {
-        require(stakingVault.isTopStaker(msg.sender), "not top staker");
-        require(bytes(description).length > 0, "empty description");
+        if (!stakingVault.isTopStaker(msg.sender)) revert NotTopStaker();
+        if (bytes(description).length == 0) revert EmptyDescription();
 
         // Per-type validation
         if (actionType == ActionType.SendPLS) {
-            require(target != address(0), "target required");
-            require(amount >= minProposalAmount, "below min amount");
-            require(amount <= maxProposalAmount, "above max amount");
+            if (target == address(0)) revert TargetRequired();
+            if (amount < minProposalAmount) revert BelowMinAmount();
+            if (amount > maxProposalAmount) revert AboveMaxAmount();
         } else if (actionType == ActionType.BuyAndBurn) {
-            require(actionToken != address(0), "actionToken required");
-            require(actionToken != wpls, "actionToken cannot be WPLS");
-            require(amount >= minProposalAmount, "below min amount");
-            require(amount <= maxProposalAmount, "above max amount");
+            if (actionToken == address(0)) revert ActionTokenRequired();
+            if (actionToken == wpls) revert ActionTokenCannotBeWPLS();
+            if (amount < minProposalAmount) revert BelowMinAmount();
+            if (amount > maxProposalAmount) revert AboveMaxAmount();
         } else if (actionType == ActionType.AddAndBurnLP) {
-            require(actionToken != address(0), "actionToken required");
-            require(amount >= minProposalAmount, "below min amount");
-            require(amount <= maxProposalAmount, "above max amount");
+            if (actionToken == address(0)) revert ActionTokenRequired();
+            if (amount < minProposalAmount) revert BelowMinAmount();
+            if (amount > maxProposalAmount) revert AboveMaxAmount();
         } else if (actionType == ActionType.Custom) {
-            require(target != address(0), "target required");
-            require(data.length > 0, "data required");
+            if (target == address(0)) revert TargetRequired();
+            if (data.length == 0) revert DataRequired();
             // amount can be 0 for Custom
         }
 
         // 1 active proposal per wallet
         uint256 latestId = latestProposalIds[msg.sender];
         if (latestId != 0) {
-            require(state(latestId) != ProposalState.Active, "one active proposal per proposer");
+            if (state(latestId) == ProposalState.Active) revert OneActiveProposalPerProposer();
         }
 
         // Auto-unlock any defeated/executed proposals to free locked funds
@@ -164,7 +201,7 @@ contract TreasuryDAO is ITreasuryDAO, Ownable, ReentrancyGuard {
 
         // Ensure treasury can cover the proposal
         if (amount > 0) {
-            require(amount <= availableBalance(), "insufficient available balance");
+            if (amount > availableBalance()) revert InsufficientAvailableBalance();
         }
 
         // Lock funds
@@ -201,21 +238,20 @@ contract TreasuryDAO is ITreasuryDAO, Ownable, ReentrancyGuard {
 
     /// @notice Cast a yes/no vote weighted by staked balance.
     function castVote(uint256 proposalId, bool support) external override {
-        require(proposalId >= 1 && proposalId <= proposalCount, "invalid proposal");
+        if (proposalId < 1 || proposalId > proposalCount) revert InvalidProposal();
 
         ProposalState s = state(proposalId);
-        require(s == ProposalState.Active, "voting not active");
+        if (s != ProposalState.Active) revert VotingNotActive();
 
         Receipt storage receipt = _receipts[proposalId][msg.sender];
-        require(!receipt.hasVoted, "already voted");
+        if (receipt.hasVoted) revert AlreadyVoted();
 
         uint256 weight = stakingVault.effectiveBalance(msg.sender);
-        require(weight > 0, "no voting power");
-        require(
-            stakingVault.stakeTimestamp(msg.sender) != 0 &&
-            stakingVault.stakeTimestamp(msg.sender) < block.timestamp,
-            "must stake at least 1 block before voting"
-        );
+        if (weight == 0) revert NoVotingPower();
+        if (
+            stakingVault.stakeTimestamp(msg.sender) == 0 ||
+            stakingVault.stakeTimestamp(msg.sender) >= block.timestamp
+        ) revert MustStakeBeforeVoting();
 
         receipt.hasVoted = true;
         receipt.support = support;
@@ -238,8 +274,8 @@ contract TreasuryDAO is ITreasuryDAO, Ownable, ReentrancyGuard {
     /// @notice Execute a proposal that has succeeded. Anyone may call.
     ///         Dispatches to the appropriate action executor based on actionType.
     function executeProposal(uint256 proposalId) external override nonReentrant {
-        require(proposalId >= 1 && proposalId <= proposalCount, "invalid proposal");
-        require(state(proposalId) == ProposalState.Succeeded, "not succeeded");
+        if (proposalId < 1 || proposalId > proposalCount) revert InvalidProposal();
+        if (state(proposalId) != ProposalState.Succeeded) revert NotSucceeded();
 
         Proposal storage p = _proposals[proposalId];
         p.executed = true;
@@ -262,12 +298,12 @@ contract TreasuryDAO is ITreasuryDAO, Ownable, ReentrancyGuard {
 
     /// @notice Unlock funds for a defeated proposal. Anyone may call.
     function unlockDefeated(uint256 proposalId) public {
-        require(proposalId >= 1 && proposalId <= proposalCount, "invalid proposal");
-        require(state(proposalId) == ProposalState.Defeated, "not defeated");
+        if (proposalId < 1 || proposalId > proposalCount) revert InvalidProposal();
+        if (state(proposalId) != ProposalState.Defeated) revert NotDefeated();
 
         Proposal storage p = _proposals[proposalId];
         // Use the executed flag to ensure we only unlock once
-        require(!p.executed, "already unlocked");
+        if (p.executed) revert AlreadyUnlocked();
         p.executed = true; // reuse flag to prevent double-unlock
 
         lockedAmount -= p.amount;
@@ -323,7 +359,7 @@ contract TreasuryDAO is ITreasuryDAO, Ownable, ReentrancyGuard {
     /// @dev Send PLS to the proposal's target address.
     function _executeSendPLS(Proposal storage p) internal {
         (bool ok,) = p.target.call{value: p.amount}("");
-        require(ok, "PLS transfer failed");
+        if (!ok) revert PLSTransferFailed();
     }
 
     /// @dev Swap PLS→token on PulseX → try burn(), fallback to DEAD.
@@ -428,7 +464,7 @@ contract TreasuryDAO is ITreasuryDAO, Ownable, ReentrancyGuard {
     /// @dev Execute target.call{value}(data).
     function _executeCustom(Proposal storage p) internal {
         (bool success,) = p.target.call{value: p.amount}(p.data);
-        require(success, "custom call failed");
+        if (!success) revert CustomCallFailed();
     }
 
     // ---------------------------------------------------------------
@@ -450,7 +486,7 @@ contract TreasuryDAO is ITreasuryDAO, Ownable, ReentrancyGuard {
     // ---------------------------------------------------------------
 
     function proposals(uint256 proposalId) external view override returns (Proposal memory) {
-        require(proposalId >= 1 && proposalId <= proposalCount, "invalid proposal");
+        if (proposalId < 1 || proposalId > proposalCount) revert InvalidProposal();
         return _proposals[proposalId];
     }
 
@@ -463,7 +499,7 @@ contract TreasuryDAO is ITreasuryDAO, Ownable, ReentrancyGuard {
 
     /// @notice Yes-vote percentage: yesVotes * 100 / (yesVotes + noVotes).
     function votingPercent(uint256 proposalId) public view override returns (uint256) {
-        require(proposalId >= 1 && proposalId <= proposalCount, "invalid proposal");
+        if (proposalId < 1 || proposalId > proposalCount) revert InvalidProposal();
         Proposal storage p = _proposals[proposalId];
         uint256 totalVotes = p.yesVotes + p.noVotes;
         if (totalVotes == 0) return 0;
@@ -472,7 +508,7 @@ contract TreasuryDAO is ITreasuryDAO, Ownable, ReentrancyGuard {
 
     /// @notice Derive the current state of a proposal.
     function state(uint256 proposalId) public view override returns (ProposalState) {
-        require(proposalId >= 1 && proposalId <= proposalCount, "invalid proposal");
+        if (proposalId < 1 || proposalId > proposalCount) revert InvalidProposal();
 
         Proposal storage p = _proposals[proposalId];
 
@@ -514,49 +550,49 @@ contract TreasuryDAO is ITreasuryDAO, Ownable, ReentrancyGuard {
     // ---------------------------------------------------------------
 
     function setStakingVault(address vault) external override onlyOwner {
-        require(vault != address(0), "zero address");
+        if (vault == address(0)) revert ZeroAddress();
         emit StakingVaultUpdated(address(stakingVault), vault);
         stakingVault = IStakingVault(vault);
     }
 
     function setVotingPeriod(uint256 period) external override onlyOwner {
-        require(period >= minVotingPeriod && period <= maxVotingPeriod, "out of range");
+        if (period < minVotingPeriod || period > maxVotingPeriod) revert OutOfRange();
         emit VotingPeriodUpdated(votingPeriod, period);
         votingPeriod = period;
     }
 
     function setMinVoters(uint256 count) external override onlyOwner {
-        require(count > 0, "zero voters");
+        if (count == 0) revert ZeroVoters();
         emit MinVotersUpdated(minVoters, count);
         minVoters = count;
     }
 
     function setSupermajorityPct(uint256 pct) external override onlyOwner {
-        require(pct >= 51 && pct <= 100, "out of range");
+        if (pct < 51 || pct > 100) revert OutOfRange();
         emit SupermajorityPctUpdated(supermajorityPct, pct);
         supermajorityPct = pct;
     }
 
     function setMaxProposalAmount(uint256 amount) external override onlyOwner {
-        require(amount >= minProposalAmount, "max < min");
+        if (amount < minProposalAmount) revert MaxBelowMin();
         emit MaxProposalAmountUpdated(maxProposalAmount, amount);
         maxProposalAmount = amount;
     }
 
     function setMinProposalAmount(uint256 amount) external override onlyOwner {
-        require(amount > 0 && amount <= maxProposalAmount, "invalid min");
+        if (amount == 0 || amount > maxProposalAmount) revert InvalidMin();
         emit MinProposalAmountUpdated(minProposalAmount, amount);
         minProposalAmount = amount;
     }
 
     function setDexRouter(address router) external override onlyOwner {
-        require(router != address(0), "zero address");
+        if (router == address(0)) revert ZeroAddress();
         emit DexRouterUpdated(dexRouter, router);
         dexRouter = router;
     }
 
     function setToken(address _token) external override onlyOwner {
-        require(_token != address(0), "zero address");
+        if (_token == address(0)) revert ZeroAddress();
         emit TokenAddressUpdated(token, _token);
         token = _token;
     }
@@ -573,19 +609,19 @@ contract TreasuryDAO is ITreasuryDAO, Ownable, ReentrancyGuard {
         address target,
         bytes calldata data
     ) external override onlyOwner returns (uint256 presetId) {
-        require(bytes(name).length > 0, "empty name");
+        if (bytes(name).length == 0) revert EmptyName();
 
         // Per-type validation (same rules as proposals)
         if (actionType == ActionType.SendPLS) {
-            require(target != address(0), "target required");
+            if (target == address(0)) revert TargetRequired();
         } else if (actionType == ActionType.BuyAndBurn) {
-            require(actionToken != address(0), "actionToken required");
-            require(actionToken != wpls, "actionToken cannot be WPLS");
+            if (actionToken == address(0)) revert ActionTokenRequired();
+            if (actionToken == wpls) revert ActionTokenCannotBeWPLS();
         } else if (actionType == ActionType.AddAndBurnLP) {
-            require(actionToken != address(0), "actionToken required");
+            if (actionToken == address(0)) revert ActionTokenRequired();
         } else if (actionType == ActionType.Custom) {
-            require(target != address(0), "target required");
-            require(data.length > 0, "data required");
+            if (target == address(0)) revert TargetRequired();
+            if (data.length == 0) revert DataRequired();
         }
 
         presetCount++;
@@ -605,15 +641,15 @@ contract TreasuryDAO is ITreasuryDAO, Ownable, ReentrancyGuard {
 
     /// @notice Deactivate a preset. Only owner.
     function removePreset(uint256 presetId) external override onlyOwner {
-        require(presetId >= 1 && presetId <= presetCount, "invalid preset");
-        require(_presets[presetId].active, "already removed");
+        if (presetId < 1 || presetId > presetCount) revert InvalidPreset();
+        if (!_presets[presetId].active) revert AlreadyRemoved();
         _presets[presetId].active = false;
         emit PresetRemoved(presetId);
     }
 
     /// @notice Get a single preset by ID.
     function getPreset(uint256 presetId) external view override returns (Preset memory) {
-        require(presetId >= 1 && presetId <= presetCount, "invalid preset");
+        if (presetId < 1 || presetId > presetCount) revert InvalidPreset();
         return _presets[presetId];
     }
 

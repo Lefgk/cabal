@@ -109,7 +109,7 @@ contract StakingVaultSingleTokenTest is Test {
 
         // No extra tokens sent — only staked principal present.
         // processRewards should revert because balance - _totalSupply == 0.
-        vm.expectRevert("StakingVault: no new rewards");
+        vm.expectRevert(StakingVault.NoNewRewards.selector);
         vault.processRewards();
     }
 
@@ -118,7 +118,7 @@ contract StakingVaultSingleTokenTest is Test {
         _stakeFor(bob, 50e18);
 
         assertEq(token.balanceOf(address(vault)), 100e18);
-        vm.expectRevert("StakingVault: no new rewards");
+        vm.expectRevert(StakingVault.NoNewRewards.selector);
         vault.processRewards();
     }
 
@@ -267,7 +267,7 @@ contract StakingVaultSingleTokenTest is Test {
 
         // Attacker sends nothing but tries to processRewards.
         vm.prank(attacker);
-        vm.expectRevert("StakingVault: no new rewards");
+        vm.expectRevert(StakingVault.NoNewRewards.selector);
         vault.processRewards();
 
         // Principal still safe.
@@ -451,7 +451,7 @@ contract StakingVaultSingleTokenTest is Test {
         // In single-token mode, topUp was not wired up in setUp.
         _stakeFor(alice, 100e18);
         vm.deal(address(this), 1e18);
-        vm.expectRevert("StakingVault: no router");
+        vm.expectRevert(StakingVault.NoRouter.selector);
         vault.topUp{value: 1e18}();
     }
 
@@ -544,7 +544,7 @@ contract StakingVaultSingleTokenTest is Test {
         // with "no new rewards" because nothing actually changed.
         uint256 reward = SEVEN_DAYS - 1;
         token.mint(address(vault), reward);
-        vm.expectRevert("StakingVault: no new rewards");
+        vm.expectRevert(StakingVault.NoNewRewards.selector);
         vault.processRewards();
 
         // State unchanged.

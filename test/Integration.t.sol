@@ -310,7 +310,7 @@ contract VaultDAOIntegrationTest is Test {
         // Vault balance == stake balance, no tax has accumulated.
         assertEq(tstt.balanceOf(address(vault)), 1_000e18);
 
-        vm.expectRevert("StakingVault: no new rewards");
+        vm.expectRevert(StakingVault.NoNewRewards.selector);
         vault.processRewards();
     }
 
@@ -356,7 +356,7 @@ contract VaultDAOIntegrationTest is Test {
 
         // Carol can no longer propose.
         vm.prank(carol);
-        vm.expectRevert("not top staker");
+        vm.expectRevert(TreasuryDAO.NotTopStaker.selector);
         dao.propose(50e18, marketingWallet, "another", ITreasuryDAO.ActionType.SendPLS, address(0), "");
 
         // Dave can propose now.

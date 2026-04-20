@@ -140,12 +140,12 @@ contract StakingVaultTest is Test {
     }
 
     function test_constructor_revertsZeroRewardToken() public {
-        vm.expectRevert("StakingVault: zero rewards token");
+        vm.expectRevert(StakingVault.ZeroRewardsToken.selector);
         new StakingVault(address(stakeToken), address(0), owner, TOP_COUNT);
     }
 
     function test_constructor_revertsZeroTopCount() public {
-        vm.expectRevert("StakingVault: invalid top count");
+        vm.expectRevert(StakingVault.InvalidTopCount.selector);
         new StakingVault(address(stakeToken), address(rewardToken), owner, 0);
     }
 
@@ -168,7 +168,7 @@ contract StakingVaultTest is Test {
 
     function test_stake_revertsZeroAmount() public {
         vm.prank(alice);
-        vm.expectRevert("StakingVault: zero stake");
+        vm.expectRevert(StakingVault.ZeroStake.selector);
         vault.stake(0);
     }
 
@@ -188,7 +188,7 @@ contract StakingVaultTest is Test {
         vault.setPaused(true);
         _mintAndApprove(alice, 100e18);
         vm.prank(alice);
-        vm.expectRevert("StakingVault: paused");
+        vm.expectRevert(StakingVault.IsPaused.selector);
         vault.stake(100e18);
     }
 
@@ -248,7 +248,7 @@ contract StakingVaultTest is Test {
         vault.stake(50e18);
 
         vm.prank(alice);
-        vm.expectRevert("StakingVault: insufficient balance");
+        vm.expectRevert(StakingVault.InsufficientBalance.selector);
         vault.withdraw(51e18);
     }
 
@@ -258,7 +258,7 @@ contract StakingVaultTest is Test {
         vault.stake(50e18);
 
         vm.prank(alice);
-        vm.expectRevert("StakingVault: zero withdraw");
+        vm.expectRevert(StakingVault.ZeroWithdraw.selector);
         vault.withdraw(0);
     }
 
@@ -339,20 +339,20 @@ contract StakingVaultTest is Test {
     function test_stakeLocked_revertsInvalidDuration() public {
         _mintAndApprove(alice, 100e18);
         vm.prank(alice);
-        vm.expectRevert("StakingVault: invalid lock duration");
+        vm.expectRevert(StakingVault.UseStakeForFlex.selector);
         vault.stakeLocked(100e18, 42 days);
     }
 
     function test_stakeLocked_revertsFlexDuration() public {
         _mintAndApprove(alice, 100e18);
         vm.prank(alice);
-        vm.expectRevert("StakingVault: use stake() for flex");
+        vm.expectRevert(StakingVault.UseStakeForFlex.selector);
         vault.stakeLocked(100e18, 0);
     }
 
     function test_stakeLocked_revertsZeroAmount() public {
         vm.prank(alice);
-        vm.expectRevert("StakingVault: zero stake");
+        vm.expectRevert(StakingVault.ZeroStake.selector);
         vault.stakeLocked(0, 90 days);
     }
 
@@ -377,7 +377,7 @@ contract StakingVaultTest is Test {
         for (uint256 i; i < 50; ++i) {
             vault.stakeLocked(1e18, 90 days);
         }
-        vm.expectRevert("StakingVault: too many locks");
+        vm.expectRevert(StakingVault.TooManyLocks.selector);
         vault.stakeLocked(1e18, 90 days);
         vm.stopPrank();
     }
@@ -386,7 +386,7 @@ contract StakingVaultTest is Test {
         vault.setPaused(true);
         _mintAndApprove(alice, 100e18);
         vm.prank(alice);
-        vm.expectRevert("StakingVault: paused");
+        vm.expectRevert(StakingVault.IsPaused.selector);
         vault.stakeLocked(100e18, 90 days);
     }
 
@@ -502,14 +502,14 @@ contract StakingVaultTest is Test {
         ids[1] = 1;
 
         vm.prank(alice);
-        vm.expectRevert("StakingVault: ids must be descending");
+        vm.expectRevert(StakingVault.IdsNotDescending.selector);
         vault.unlock(ids);
     }
 
     function test_unlock_revertsEmptyArray() public {
         uint256[] memory ids = new uint256[](0);
         vm.prank(alice);
-        vm.expectRevert("StakingVault: empty array");
+        vm.expectRevert(StakingVault.EmptyArray.selector);
         vault.unlock(ids);
     }
 
@@ -532,7 +532,7 @@ contract StakingVaultTest is Test {
         uint256[] memory ids = new uint256[](1);
         ids[0] = 0;
         vm.prank(alice);
-        vm.expectRevert("StakingVault: tokens locked by active vote");
+        vm.expectRevert(StakingVault.TokensVoteLocked.selector);
         vault.unlock(ids);
     }
 
@@ -886,7 +886,7 @@ contract StakingVaultTest is Test {
     }
 
     function test_notifyRewardAmount_revertsZero() public {
-        vm.expectRevert("StakingVault: zero reward");
+        vm.expectRevert(StakingVault.ZeroReward.selector);
         vault.notifyRewardAmount(0);
     }
 
@@ -921,7 +921,7 @@ contract StakingVaultTest is Test {
     }
 
     function test_topUp_revertsZeroPLS() public {
-        vm.expectRevert("StakingVault: zero PLS");
+        vm.expectRevert(StakingVault.ZeroPLS.selector);
         vault.topUp{value: 0}();
     }
 
@@ -945,7 +945,7 @@ contract StakingVaultTest is Test {
         vm.prank(alice);
         vault.stake(100e18);
 
-        vm.expectRevert("StakingVault: no new rewards");
+        vm.expectRevert(StakingVault.NoNewRewards.selector);
         vault.processRewards();
     }
 
@@ -994,12 +994,12 @@ contract StakingVaultTest is Test {
         vault.stake(100e18);
         _notifyReward(700e18);
 
-        vm.expectRevert("StakingVault: period not finished");
+        vm.expectRevert(StakingVault.PeriodNotFinished.selector);
         vault.setRewardsDuration(14 days);
     }
 
     function test_setRewardsDuration_revertsZero() public {
-        vm.expectRevert("StakingVault: zero duration");
+        vm.expectRevert(StakingVault.ZeroDuration.selector);
         vault.setRewardsDuration(0);
     }
 
@@ -1011,7 +1011,7 @@ contract StakingVaultTest is Test {
         vault.setPaused(true);
         _mintAndApprove(alice, 100e18);
         vm.prank(alice);
-        vm.expectRevert("StakingVault: paused");
+        vm.expectRevert(StakingVault.IsPaused.selector);
         vault.stake(100e18);
     }
 
@@ -1027,7 +1027,7 @@ contract StakingVaultTest is Test {
 
     function test_recoverERC20_cannotRecoverStakingToken() public {
         stakeToken.mint(address(vault), 100e18);
-        vm.expectRevert("StakingVault: cannot recover staking token");
+        vm.expectRevert(StakingVault.CannotRecoverStakingToken.selector);
         vault.recoverERC20(address(stakeToken), 100e18);
     }
 
@@ -1121,7 +1121,7 @@ contract StakingVaultTest is Test {
         vault.lockForVote(alice, block.timestamp + 7 days);
 
         vm.prank(alice);
-        vm.expectRevert("StakingVault: tokens locked by active vote");
+        vm.expectRevert(StakingVault.TokensVoteLocked.selector);
         vault.withdraw(10e18);
     }
 
@@ -1142,7 +1142,7 @@ contract StakingVaultTest is Test {
 
     function test_voteLock_nonDaoCannotCallLockForVote() public {
         vm.prank(alice);
-        vm.expectRevert("StakingVault: caller is not DAO");
+        vm.expectRevert(StakingVault.NotDAO.selector);
         vault.lockForVote(alice, block.timestamp + 7 days);
     }
 
