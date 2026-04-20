@@ -21,6 +21,9 @@ contract LiquidityDeployer is Ownable, ReentrancyGuard {
     address public routerV2; // primary — PulseX V2
     address public routerV1; // fallback — PulseX V1
 
+    /// @notice Max slippage in basis points (e.g. 500 = 5%). Applied to swaps.
+    uint256 public maxSlippageBps = 2000;
+
     event LiquidityAdded(
         address indexed tokenA,
         address indexed tokenB,
@@ -29,6 +32,7 @@ contract LiquidityDeployer is Ownable, ReentrancyGuard {
     );
     event RouterV2Updated(address indexed oldRouter, address indexed newRouter);
     event RouterV1Updated(address indexed oldRouter, address indexed newRouter);
+    event MaxSlippageUpdated(uint256 oldBps, uint256 newBps);
 
     constructor(address _wpls, address _routerV2, address _routerV1) Ownable(msg.sender) {
         require(_wpls != address(0), "zero wpls");
@@ -68,11 +72,33 @@ contract LiquidityDeployer is Ownable, ReentrancyGuard {
         routerV1 = _router;
     }
 
+    function setMaxSlippageBps(uint256 _bps) external onlyOwner {
+        require(_bps <= 5000, "slippage > 50%");
+        emit MaxSlippageUpdated(maxSlippageBps, _bps);
+        maxSlippageBps = _bps;
+    }
+
     receive() external payable {}
 
     // ---------------------------------------------------------------
     //  Internal
     // ---------------------------------------------------------------
+
+    /// @dev Get the minimum output for a swap after slippage.
+    ///      Tries V2 quote first, falls back to V1 quote.
+    function _getMinOut(address[] memory path, uint256 amountIn) internal view returns (uint256) {
+        uint256 _slippage = maxSlippageBps;
+        // Try V2 quote
+        try IPulseXRouter(routerV2).getAmountsOut(amountIn, path) returns (uint256[] memory amounts) {
+            return amounts[amounts.length - 1] * (10000 - _slippage) / 10000;
+        } catch {}
+        // Try V1 quote
+        try IPulseXRouter(routerV1).getAmountsOut(amountIn, path) returns (uint256[] memory amounts) {
+            return amounts[amounts.length - 1] * (10000 - _slippage) / 10000;
+        } catch {}
+        // Both quotes failed — use 0 (swap itself will revert if no pair)
+        return 0;
+    }
 
     /// @dev Swap PLS for a token. Tries V2 first; falls back to V1 on revert.
     function _swapPLSForToken(address token, uint256 amount) internal {
@@ -80,14 +106,16 @@ contract LiquidityDeployer is Ownable, ReentrancyGuard {
         path[0] = wpls;
         path[1] = token;
 
+        uint256 minOut = _getMinOut(path, amount);
+
         try IPulseXRouter(routerV2).swapExactETHForTokensSupportingFeeOnTransferTokens{value: amount}(
-            0, path, address(this), block.timestamp
+            minOut, path, address(this), block.timestamp
         ) {
             // V2 succeeded
         } catch {
             // V2 failed — use V1
             IPulseXRouter(routerV1).swapExactETHForTokensSupportingFeeOnTransferTokens{value: amount}(
-                0, path, address(this), block.timestamp
+                minOut, path, address(this), block.timestamp
             );
         }
     }

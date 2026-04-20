@@ -26,6 +26,11 @@ interface IPulseXRouter {
         uint256 deadline
     ) external payable returns (uint256 amountToken, uint256 amountETH, uint256 liquidity);
 
+    function getAmountsOut(
+        uint256 amountIn,
+        address[] calldata path
+    ) external view returns (uint256[] memory amounts);
+
     function addLiquidity(
         address tokenA,
         address tokenB,

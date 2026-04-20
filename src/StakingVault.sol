@@ -682,28 +682,41 @@ contract StakingVault is IStakingVault, Ownable, ReentrancyGuard {
         // If rewards ARE WPLS, leave WPLS as-is — don't unwrap
         if (address(REWARDS_TOKEN) == WPLS) return;
 
-        uint256 wplsBal = IWPLS(WPLS).balanceOf(address(this));
-        if (wplsBal > 0) {
-            try IWPLS(WPLS).withdraw(wplsBal) {} catch {}
-        }
-
-        uint256 plsBal = address(this).balance;
-        if (plsBal == 0 || plsBal < minSwapThreshold) return;
-
         address[] memory path = new address[](2);
         path[0] = WPLS;
         path[1] = address(REWARDS_TOKEN);
 
-        uint256 rewardBefore = REWARDS_TOKEN.balanceOf(address(this));
-        try dexRouter.swapExactETHForTokensSupportingFeeOnTransferTokens{value: plsBal}(
-            0,
-            path,
-            address(this),
-            block.timestamp
-        ) {
-            uint256 received = REWARDS_TOKEN.balanceOf(address(this)) - rewardBefore;
-            emit PLSSwapped(plsBal, received);
-        } catch {}
+        // Swap any excess WPLS held by the vault directly (no unwrap/rewrap)
+        uint256 wplsBal = IWPLS(WPLS).balanceOf(address(this));
+        // If staking token is WPLS, exclude user deposits + pending penalties
+        if (address(STAKING_TOKEN) == WPLS) {
+            uint256 reserved = _totalRawSupply + pendingPenaltyTokens;
+            wplsBal = wplsBal > reserved ? wplsBal - reserved : 0;
+        }
+        if (wplsBal >= minSwapThreshold) {
+            IERC20(WPLS).approve(address(dexRouter), wplsBal);
+            uint256 rewardBefore = REWARDS_TOKEN.balanceOf(address(this));
+            try dexRouter.swapExactTokensForTokensSupportingFeeOnTransferTokens(
+                wplsBal, 0, path, address(this), block.timestamp
+            ) {
+                uint256 received = REWARDS_TOKEN.balanceOf(address(this)) - rewardBefore;
+                emit PLSSwapped(wplsBal, received);
+            } catch {
+                IERC20(WPLS).approve(address(dexRouter), 0);
+            }
+        }
+
+        // Swap any raw PLS held by the vault
+        uint256 plsBal = address(this).balance;
+        if (plsBal >= minSwapThreshold) {
+            uint256 rewardBefore = REWARDS_TOKEN.balanceOf(address(this));
+            try dexRouter.swapExactETHForTokensSupportingFeeOnTransferTokens{value: plsBal}(
+                0, path, address(this), block.timestamp
+            ) {
+                uint256 received = REWARDS_TOKEN.balanceOf(address(this)) - rewardBefore;
+                emit PLSSwapped(plsBal, received);
+            } catch {}
+        }
     }
 
     function _processRewardsIfNew() internal {

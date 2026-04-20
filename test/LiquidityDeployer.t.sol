@@ -18,11 +18,12 @@ contract MockERC20 is ERC20 {
     }
 }
 
-/// @dev Normal mock router — all calls succeed.
+/// @dev Normal mock router — all calls succeed. 1:1 swap ratio.
 contract MockPulseXRouter {
     address public immutable wplsAddr;
 
     uint256 public swapCallCount;
+    uint256 public lastSwapMinOut;
     uint256 public lastLPLiquidity;
     address public lastLPTo;
     address public lastLiqTokenA;
@@ -32,9 +33,16 @@ contract MockPulseXRouter {
         wplsAddr = _wpls;
     }
 
+    function getAmountsOut(uint256 amountIn, address[] calldata) external pure returns (uint256[] memory amounts) {
+        amounts = new uint256[](2);
+        amounts[0] = amountIn;
+        amounts[1] = amountIn; // 1:1 ratio
+    }
+
     function swapExactETHForTokensSupportingFeeOnTransferTokens(
-        uint256, address[] calldata path, address to, uint256
+        uint256 amountOutMin, address[] calldata path, address to, uint256
     ) external payable {
+        lastSwapMinOut = amountOutMin;
         MockERC20(path[1]).mint(to, msg.value);
         swapCallCount++;
     }
@@ -81,6 +89,10 @@ contract MockPulseXRouter {
 
 /// @dev Router that reverts on swap and addLiquidity calls — simulates "no V2 pair".
 contract RevertingRouter {
+    function getAmountsOut(uint256, address[] calldata) external pure returns (uint256[] memory) {
+        revert("no pair");
+    }
+
     function swapExactETHForTokensSupportingFeeOnTransferTokens(
         uint256, address[] calldata, address, uint256
     ) external payable {
@@ -131,7 +143,6 @@ contract LiquidityDeployerTest is Test {
         uint256 plsAmount = 10 ether;
         deployer.addLiquidity{value: plsAmount}(address(tokenA), address(0));
 
-        // LP sent to DEAD
         assertEq(routerV2.lastLPTo(), DEAD);
         assertGt(routerV2.lastLPLiquidity(), 0);
     }
@@ -253,7 +264,6 @@ contract LiquidityDeployerTest is Test {
     function test_addLiquidity_usesV2WhenAvailable() public {
         deployer.addLiquidity{value: 10 ether}(address(tokenA), address(0));
 
-        // V2 should have been called, V1 should not
         assertGt(routerV2.swapCallCount(), 0);
         assertEq(routerV1.swapCallCount(), 0);
         assertEq(routerV2.lastLPTo(), DEAD);
@@ -262,13 +272,11 @@ contract LiquidityDeployerTest is Test {
     // ---- V1 fallback — Token/PLS ----
 
     function test_addLiquidity_fallsBackToV1_tokenPls() public {
-        // Use a reverting V2 router
         RevertingRouter badV2 = new RevertingRouter();
         LiquidityDeployer d = new LiquidityDeployer(wpls, address(badV2), address(routerV1));
 
         d.addLiquidity{value: 10 ether}(address(tokenA), address(0));
 
-        // V1 got the swap and LP
         assertGt(routerV1.swapCallCount(), 0);
         assertEq(routerV1.lastLPTo(), DEAD);
         assertGt(routerV1.lastLPLiquidity(), 0);
@@ -282,23 +290,81 @@ contract LiquidityDeployerTest is Test {
 
         d.addLiquidity{value: 10 ether}(address(tokenA), address(tokenB));
 
-        // V1 got the swaps and LP
         assertGt(routerV1.swapCallCount(), 0);
         assertEq(routerV1.lastLPTo(), DEAD);
         assertEq(routerV1.lastLiqTokenA(), address(tokenA));
         assertEq(routerV1.lastLiqTokenB(), address(tokenB));
     }
 
-    // ---- Mixed routers — tokenA on V2, tokenB falls to V1 ----
+    // ---- Mixed routers ----
 
     function test_addLiquidity_mixedRouters() public {
-        // V2 works for both tokens at swap level (both succeed on routerV2),
-        // but LP addLiquidity on V2 could fail. We test the simpler case:
-        // both swaps succeed on V2, LP added on V2.
         deployer.addLiquidity{value: 10 ether}(address(tokenA), address(tokenB));
 
         assertEq(routerV2.swapCallCount(), 2);
         assertEq(routerV1.swapCallCount(), 0);
         assertEq(routerV2.lastLPTo(), DEAD);
+    }
+
+    // ---- Slippage protection ----
+
+    function test_slippage_defaultIs2000Bps() public view {
+        assertEq(deployer.maxSlippageBps(), 2000);
+    }
+
+    function test_slippage_swapPassesMinOut() public {
+        // Default 20% slippage, 1:1 mock quote, swapping 5 ether
+        // minOut = 5 ether * 8000 / 10000 = 4 ether
+        deployer.addLiquidity{value: 10 ether}(address(tokenA), address(0));
+
+        assertEq(routerV2.lastSwapMinOut(), 5 ether * 8000 / 10000);
+    }
+
+    function test_slippage_tighterSlippage() public {
+        deployer.setMaxSlippageBps(100); // 1%
+        deployer.addLiquidity{value: 10 ether}(address(tokenA), address(0));
+
+        // minOut = 5 ether * 9900 / 10000 = 4.95 ether
+        assertEq(routerV2.lastSwapMinOut(), 5 ether * 9900 / 10000);
+    }
+
+    function test_slippage_zeroSlippage() public {
+        deployer.setMaxSlippageBps(0); // 0% = exact quote
+        deployer.addLiquidity{value: 10 ether}(address(tokenA), address(0));
+
+        assertEq(routerV2.lastSwapMinOut(), 5 ether);
+    }
+
+    function test_setMaxSlippageBps() public {
+        deployer.setMaxSlippageBps(200);
+        assertEq(deployer.maxSlippageBps(), 200);
+    }
+
+    function test_setMaxSlippageBps_revertsOver50Pct() public {
+        vm.expectRevert("slippage > 50%");
+        deployer.setMaxSlippageBps(5001);
+    }
+
+    function test_setMaxSlippageBps_revertsNonOwner() public {
+        vm.prank(makeAddr("attacker"));
+        vm.expectRevert();
+        deployer.setMaxSlippageBps(100);
+    }
+
+    function test_setMaxSlippageBps_emitsEvent() public {
+        vm.expectEmit(false, false, false, true);
+        emit LiquidityDeployer.MaxSlippageUpdated(2000, 200);
+        deployer.setMaxSlippageBps(200);
+    }
+
+    function test_slippage_fallbackQuoteUsesV1() public {
+        // V2 reverts on getAmountsOut, V1 provides quote
+        RevertingRouter badV2 = new RevertingRouter();
+        LiquidityDeployer d = new LiquidityDeployer(wpls, address(badV2), address(routerV1));
+
+        d.addLiquidity{value: 10 ether}(address(tokenA), address(0));
+
+        // V1 swap should have minOut = 5 ether * 8000 / 10000
+        assertEq(routerV1.lastSwapMinOut(), 5 ether * 8000 / 10000);
     }
 }
