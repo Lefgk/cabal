@@ -74,7 +74,7 @@ contract TreasuryDAO is ITreasuryDAO, Ownable, ReentrancyGuard {
     address public override marketingWallet;
 
     uint256 public votingPeriod = 7 days;
-    uint256 public supermajorityPct = 65;  // yes/(yes+no) >= 65%
+    uint256 public supermajorityPct = 6500;  // yes/(yes+no) >= 65% (basis points)
     uint256 public minVoters = 5;          // minimum unique voters to pass
     uint256 public executionWindow = 7 days; // time after voting ends to execute before expiry
 
@@ -545,13 +545,13 @@ contract TreasuryDAO is ITreasuryDAO, Ownable, ReentrancyGuard {
         return _receipts[proposalId][voter];
     }
 
-    /// @notice Yes-vote percentage: yesVotes * 100 / (yesVotes + noVotes).
+    /// @notice Yes-vote percentage in basis points: yesVotes * 10000 / (yesVotes + noVotes).
     function votingPercent(uint256 proposalId) public view override returns (uint256) {
         if (proposalId < 1 || proposalId > proposalCount) revert InvalidProposal();
         Proposal storage p = _proposals[proposalId];
         uint256 totalVotes = p.yesVotes + p.noVotes;
         if (totalVotes == 0) return 0;
-        return p.yesVotes * 100 / totalVotes;
+        return p.yesVotes * 10000 / totalVotes;
     }
 
     /// @notice Derive the current state of a proposal.
@@ -595,7 +595,7 @@ contract TreasuryDAO is ITreasuryDAO, Ownable, ReentrancyGuard {
         if (p.voters < minVoters) return false;
         uint256 totalVotes = p.yesVotes + p.noVotes;
         if (totalVotes == 0) return false;
-        return p.yesVotes * 100 / totalVotes >= supermajorityPct;
+        return p.yesVotes * 10000 / totalVotes >= supermajorityPct;
     }
 
     // ---------------------------------------------------------------
@@ -621,7 +621,7 @@ contract TreasuryDAO is ITreasuryDAO, Ownable, ReentrancyGuard {
     }
 
     function setSupermajorityPct(uint256 pct) external override onlyOwner {
-        if (pct < 51 || pct > 100) revert OutOfRange();
+        if (pct < 5100 || pct > 10000) revert OutOfRange();
         emit SupermajorityPctUpdated(supermajorityPct, pct);
         supermajorityPct = pct;
     }

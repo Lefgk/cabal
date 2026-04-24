@@ -956,11 +956,11 @@ contract F11_SupermajorityRoundingBoundary is AuditPoCBase {
         vm.warp(block.timestamp + 7 days + 1);
 
         uint256 pct = dao.votingPercent(id);
-        console.log("Voting percent (integer):", pct);
-        // 649 * 100 / 1000 = 64 (truncated from 64.9)
-        assertEq(pct, 64, "64.9% truncates to 64");
+        console.log("Voting percent (bps):", pct);
+        // 649 * 10000 / 1000 = 6490 bps (64.90%) — below 6500 threshold
+        assertEq(pct, 6490, "64.9% = 6490 bps");
         assertEq(uint8(dao.state(id)), uint8(ITreasuryDAO.ProposalState.Defeated),
-            "64.9% is below 65% supermajority - correctly fails");
+            "6490 bps is below 6500 supermajority - correctly fails");
     }
 }
 
