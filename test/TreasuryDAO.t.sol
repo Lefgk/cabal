@@ -251,7 +251,7 @@ contract TreasuryDAOTest is Test {
         assertEq(dao.wpls(), address(wplsToken));
         assertEq(dao.dexRouter(), address(mockRouter));
         assertEq(dao.votingPeriod(), 7 days);
-        assertEq(dao.supermajorityPct(), 65);
+        assertEq(dao.supermajorityPct(), 6500);
         assertEq(dao.minVoters(), 5);
         assertEq(dao.maxProposalAmount(), 100_000_000 ether);
         assertEq(dao.minProposalAmount(), 1 ether);
@@ -658,8 +658,8 @@ contract TreasuryDAOTest is Test {
         vm.prank(carol);
         dao.castVote(id, false); // 60e18 no
 
-        // 100/(100+60) = 62%
-        assertEq(dao.votingPercent(id), 62);
+        // 100/(100+60) = 62.5% = 6250 bps
+        assertEq(dao.votingPercent(id), 6250);
     }
 
     function test_votingPercent_zeroVotes() public {
@@ -825,18 +825,18 @@ contract TreasuryDAOTest is Test {
     }
 
     function test_setSupermajorityPct() public {
-        dao.setSupermajorityPct(75);
-        assertEq(dao.supermajorityPct(), 75);
+        dao.setSupermajorityPct(7500);
+        assertEq(dao.supermajorityPct(), 7500);
     }
 
     function test_setSupermajorityPct_revertsTooLow() public {
         vm.expectRevert(TreasuryDAO.OutOfRange.selector);
-        dao.setSupermajorityPct(50);
+        dao.setSupermajorityPct(5000);
     }
 
     function test_setSupermajorityPct_revertsTooHigh() public {
         vm.expectRevert(TreasuryDAO.OutOfRange.selector);
-        dao.setSupermajorityPct(101);
+        dao.setSupermajorityPct(10001);
     }
 
     function test_setMaxProposalAmount() public {
@@ -1324,7 +1324,6 @@ contract TreasuryDAOTest is Test {
         MockTarget target = new MockTarget();
         bytes memory data = hex"deadbeef";
 
-        vm.prank(alice);
         uint256 id = dao.propose(
             50e18, address(target), "custom call",
             ITreasuryDAO.ActionType.Custom, address(0), data
@@ -1335,20 +1334,17 @@ contract TreasuryDAOTest is Test {
     }
 
     function test_custom_propose_revertsNoTarget() public {
-        vm.prank(alice);
         vm.expectRevert(TreasuryDAO.TargetRequired.selector);
         dao.propose(50e18, address(0), "custom", ITreasuryDAO.ActionType.Custom, address(0), hex"01");
     }
 
     function test_custom_propose_revertsNoData() public {
-        vm.prank(alice);
         vm.expectRevert(TreasuryDAO.DataRequired.selector);
         dao.propose(50e18, bob, "custom", ITreasuryDAO.ActionType.Custom, address(0), "");
     }
 
     function test_custom_propose_allowsZeroAmount() public {
         MockTarget target = new MockTarget();
-        vm.prank(alice);
         uint256 id = dao.propose(
             0, address(target), "custom no value",
             ITreasuryDAO.ActionType.Custom, address(0), hex"01"
@@ -1986,6 +1982,12 @@ contract TreasuryDAOTest is Test {
         address actionToken,
         bytes memory data
     ) internal returns (uint256) {
+        // Custom proposals require owner; all others use alice (top staker)
+        if (actionType == ITreasuryDAO.ActionType.Custom) {
+            uint256 id = dao.propose(amount, target, desc, actionType, actionToken, data);
+            _voteAndWarp(id);
+            return id;
+        }
         vm.prank(alice);
         uint256 id = dao.propose(amount, target, desc, actionType, actionToken, data);
         _voteAndWarp(id);
