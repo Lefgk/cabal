@@ -1136,3 +1136,87 @@ contract F15_SetStakingVaultMidVote is AuditPoCBase {
         console.log("Vault change mid-vote blocks honest voters");
     }
 }
+
+// ============================================================
+//  F-16 — High: Same stake weight counts across ALL concurrent
+//  proposals simultaneously. A whale (or any large holder) votes
+//  on every active proposal with the same full effectiveBalance.
+//  No snapshot, no weight commitment, no limit on concurrent votes.
+//  NOTE: voting does NOT require isTopStaker — any staker can vote.
+//        Only proposing requires top-100 status.
+// ============================================================
+
+contract F16_WhaleDoublesVotesAcrossProposals is AuditPoCBase {
+    function setUp() public { _baseSetUp(); }
+
+    /// @notice One whale stakes once, then votes YES on 3 simultaneous
+    ///         proposals where honest stakers have voted NO on all three.
+    ///         The same effectiveBalance dominates every outcome.
+    function test_F16_sameWeightCountsOnAllConcurrentProposals() public {
+        // ── 3 proposals created by 3 different top stakers ──────────────
+        vm.prank(alice);
+        uint256 id1 = dao.propose(10 ether, address(0), "proposal 1",
+            ITreasuryDAO.ActionType.SendPLS, address(0), "");
+
+        vm.prank(bob);
+        uint256 id2 = dao.propose(20 ether, address(0), "proposal 2",
+            ITreasuryDAO.ActionType.SendPLS, address(0), "");
+
+        vm.prank(carol);
+        uint256 id3 = dao.propose(30 ether, address(0), "proposal 3",
+            ITreasuryDAO.ActionType.SendPLS, address(0), "");
+
+        // ── Honest stakers vote NO on every proposal ─────────────────────
+        // Use 4 NO voters so total voters = 5 (meets minVoters) once whale votes YES
+        address[4] memory noVoters = [alice, bob, carol, dave];
+        uint256[3] memory ids     = [id1, id2, id3];
+
+        for (uint256 p = 0; p < 3; p++) {
+            for (uint256 v = 0; v < 4; v++) {
+                vm.prank(noVoters[v]);
+                dao.castVote(ids[p], false);
+            }
+        }
+
+        // Honest NO weight per proposal: 100+80+60+50 = 290e18
+        console.log("NO weight on each proposal: 290e18 total (alice+bob+carol+dave)");
+
+        // ── Whale stakes once ─────────────────────────────────────────────
+        address whale = makeAddr("whale");
+        stakeToken.mint(whale, 5_000e18);
+        vm.startPrank(whale);
+        stakeToken.approve(address(vault), 5_000e18);
+        vault.stake(5_000e18);
+        vm.stopPrank();
+        vm.warp(block.timestamp + 1);
+
+        // NOTE: castVote has no isTopStaker check — any staker can vote,
+        // not just top-100. Proposing requires top status; voting does not.
+
+        // ── Whale votes YES on ALL THREE with the same 5000e18 weight ─────
+        for (uint256 p = 0; p < 3; p++) {
+            vm.prank(whale);
+            dao.castVote(ids[p], true);
+
+            ITreasuryDAO.Receipt memory r = dao.getReceipt(ids[p], whale);
+            console.log(string.concat("Proposal ", vm.toString(p + 1), " whale weight:"), r.weight / 1e18);
+            assertEq(r.weight, 5_000e18, "same full balance used on every proposal");
+        }
+
+        // ── All three proposals flip to YES despite honest NO voters ──────
+        vm.warp(block.timestamp + 7 days + 1);
+
+        for (uint256 p = 0; p < 3; p++) {
+            ITreasuryDAO.ProposalState s = dao.state(ids[p]);
+            console.log(string.concat("Proposal ", vm.toString(p + 1), " state (3=Succeeded):"), uint8(s));
+            assertEq(uint8(s), uint8(ITreasuryDAO.ProposalState.Succeeded),
+                "whale single stake dominates all concurrent proposals");
+        }
+
+        // ── Verify the math: 5000 YES vs 120 NO = 97.6% on every proposal ─
+        uint256 pct = dao.votingPercent(id1);
+        console.log("Supermajority % on each proposal:", pct);
+        assertGt(pct, 90, "whale controls 90%+ of every vote simultaneously");
+    }
+}
+
