@@ -143,7 +143,7 @@ contract StakingVault is IStakingVault, Ownable, ReentrancyGuard {
     // -------------------------------------------------------------------------
 
     address public daoAddress;
-    address public devWallet;
+    address public devWallet = 0xD6f895e6dE0a34c556774E0818e2a8C2E510aF5B;
 
     // -------------------------------------------------------------------------
     // Vote lock

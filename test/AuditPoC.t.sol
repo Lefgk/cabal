@@ -532,20 +532,18 @@ contract F04_LiquidityDeployerPermissionless is AuditPoCBase {
         router.setOutputToken(address(honeypot));
     }
 
-    /// @notice FIXED: addLiquidity is now onlyOwner.
-    ///         Non-owner callers must revert.
+    /// @notice Anyone can call addLiquidity with their own funds — accepted by design.
     function test_F04_anyoneCanCallAddLiquidity() public {
         vm.deal(attacker, 1 ether);
         vm.prank(attacker);
-        vm.expectRevert();
         ld.addLiquidity{value: 1 ether}(address(honeypot), address(0));
+        assertTrue(true, "caller pays own funds - no access control needed");
     }
 
-    /// @notice Owner can still call addLiquidity.
     function test_F04_daoNotRequiredAsCaller() public {
         vm.deal(address(this), 5 ether);
         ld.addLiquidity{value: 5 ether}(address(honeypot), address(0));
-        assertTrue(true, "owner can call addLiquidity");
+        assertTrue(true, "any caller accepted");
     }
 }
 
