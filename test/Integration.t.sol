@@ -113,6 +113,7 @@ contract VaultDAOIntegrationTest is Test {
         // DAO: stake vault + TSTT + WPLS + dummy router
         dao = new TreasuryDAO(address(vault), address(tstt), address(wpls), dummyRouter);
         vault.setDaoAddress(address(dao));
+        dao.setMarketingWallet(marketingWallet);
 
         // Mirror production exclusions: the vault itself must be excluded so
         // reward payouts don't get taxed. The pair (seller destination) is NOT

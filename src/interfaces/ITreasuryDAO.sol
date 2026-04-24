@@ -8,7 +8,8 @@ interface ITreasuryDAO {
         Active,
         Defeated,
         Succeeded,
-        Executed
+        Executed,
+        Expired
     }
 
     enum ActionType {
@@ -34,6 +35,7 @@ interface ITreasuryDAO {
         ActionType actionType;
         address actionToken;
         bytes data;
+        bool expired;
     }
 
     struct Receipt {
@@ -70,6 +72,10 @@ interface ITreasuryDAO {
     event ProposalExecuted(uint256 indexed proposalId, uint256 amount, address target);
     event ProposalDefeated(uint256 indexed proposalId);
     event FundsUnlocked(uint256 indexed proposalId, uint256 amount);
+    event ProposalExpired(uint256 indexed proposalId, uint256 amount);
+    event TokenWhitelisted(address indexed token);
+    event TokenRemovedFromWhitelist(address indexed token);
+    event ExecutionWindowUpdated(uint256 oldWindow, uint256 newWindow);
     event PLSReceived(address indexed from, uint256 amount);
     event StakingVaultUpdated(address indexed oldVault, address indexed newVault);
     event VotingPeriodUpdated(uint256 oldPeriod, uint256 newPeriod);
@@ -81,6 +87,7 @@ interface ITreasuryDAO {
     event MinProposalAmountUpdated(uint256 oldMin, uint256 newMin);
     event PresetAdded(uint256 indexed presetId, string name, ActionType actionType);
     event PresetRemoved(uint256 indexed presetId);
+    event MarketingWalletUpdated(address indexed oldWallet, address indexed newWallet);
 
     // --- Proposal lifecycle ---
     function propose(
@@ -95,6 +102,7 @@ interface ITreasuryDAO {
     function castVote(uint256 proposalId, bool support) external;
 
     function executeProposal(uint256 proposalId) external;
+    function expireProposal(uint256 proposalId) external;
     function unlockDefeated(uint256 proposalId) external;
     function unlockDefeatedBatch(uint256[] calldata proposalIds) external;
 
@@ -118,6 +126,13 @@ interface ITreasuryDAO {
     function setMinProposalAmount(uint256 amount) external;
     function setDexRouter(address router) external;
     function setToken(address token) external;
+    function setMarketingWallet(address wallet) external;
+    function marketingWallet() external view returns (address);
+    function setExecutionWindow(uint256 window) external;
+    function executionWindow() external view returns (uint256);
+    function addWhitelistedToken(address token) external;
+    function removeWhitelistedToken(address token) external;
+    function whitelistedTokens(address token) external view returns (bool);
 
     // --- Presets ---
     function addPreset(

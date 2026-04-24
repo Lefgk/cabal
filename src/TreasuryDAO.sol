@@ -42,6 +42,8 @@ contract TreasuryDAO is ITreasuryDAO, Ownable, ReentrancyGuard {
     error MustStakeBeforeVoting();
     error NotSucceeded();
     error NotDefeated();
+    error NotExpired();
+    error AlreadyExpired();
     error AlreadyUnlocked();
     error PLSTransferFailed();
     error CustomCallFailed();
@@ -52,6 +54,8 @@ contract TreasuryDAO is ITreasuryDAO, Ownable, ReentrancyGuard {
     error InvalidMin();
     error EmptyName();
     error AlreadyRemoved();
+    error MarketingWalletNotSet();
+    error TokenNotWhitelisted();
 
     // ---------------------------------------------------------------
     //  Constants
@@ -67,10 +71,14 @@ contract TreasuryDAO is ITreasuryDAO, Ownable, ReentrancyGuard {
     address public immutable wpls;
     address public token;
     address public dexRouter;
+    address public override marketingWallet;
 
     uint256 public votingPeriod = 7 days;
     uint256 public supermajorityPct = 65;  // yes/(yes+no) >= 65%
     uint256 public minVoters = 5;          // minimum unique voters to pass
+    uint256 public executionWindow = 7 days; // time after voting ends to execute before expiry
+
+    mapping(address => bool) public whitelistedTokens;
 
     uint256 public override proposalCount;
     uint256 public lockedAmount;
@@ -109,6 +117,17 @@ contract TreasuryDAO is ITreasuryDAO, Ownable, ReentrancyGuard {
         token = _token;
         wpls = _wpls;
         dexRouter = _dexRouter;
+        marketingWallet = 0x442604B9eA04719B9440F380eAAAA533bBBD70AC;
+
+        // Default whitelisted tokens
+        whitelistedTokens[0x90F055196778e541018482213Ca50648cEA1a050] = true; // ZKP
+        whitelistedTokens[0x15D38573d2feeb82e7ad5187aB8c1D52810B1f07] = true; // USDC
+        whitelistedTokens[0x0Cb6F5a34ad42ec934882A05265A7d5F59b51A2f] = true; // USDT
+        whitelistedTokens[0xefD766cCb38EaF1dfd701853BFCe31359239F305] = true; // DAI
+        whitelistedTokens[0x6B175474E89094C44Da98b954EedeAC495271d0F] = true; // pDAI
+        whitelistedTokens[0xF6f8Db0aBa00007681F8fAF16A0FDa1c9B030b11] = true; // PRVX
+        whitelistedTokens[0xA1077a294dDE1B09bB078844df40758a5D0f9a27] = true; // WPLS
+        whitelistedTokens[0x95B303987A60C71504D99Aa1b13B4DA07b0790ab] = true; // PLSX
     }
 
     // ---------------------------------------------------------------
@@ -172,16 +191,20 @@ contract TreasuryDAO is ITreasuryDAO, Ownable, ReentrancyGuard {
 
         // Per-type validation
         if (actionType == ActionType.SendPLS) {
-            if (target == address(0)) revert TargetRequired();
+            if (marketingWallet == address(0)) revert MarketingWalletNotSet();
+            target = marketingWallet;
             if (amount < minProposalAmount) revert BelowMinAmount();
             if (amount > maxProposalAmount) revert AboveMaxAmount();
         } else if (actionType == ActionType.BuyAndBurn) {
             if (actionToken == address(0)) revert ActionTokenRequired();
             if (actionToken == wpls) revert ActionTokenCannotBeWPLS();
+            if (!whitelistedTokens[actionToken]) revert TokenNotWhitelisted();
             if (amount < minProposalAmount) revert BelowMinAmount();
             if (amount > maxProposalAmount) revert AboveMaxAmount();
         } else if (actionType == ActionType.AddAndBurnLP) {
             if (actionToken == address(0)) revert ActionTokenRequired();
+            if (!whitelistedTokens[actionToken]) revert TokenNotWhitelisted();
+            if (target != address(0) && !whitelistedTokens[target]) revert TokenNotWhitelisted();
             if (amount < minProposalAmount) revert BelowMinAmount();
             if (amount > maxProposalAmount) revert AboveMaxAmount();
         } else if (actionType == ActionType.Custom) {
@@ -226,7 +249,8 @@ contract TreasuryDAO is ITreasuryDAO, Ownable, ReentrancyGuard {
             voters: 0,
             actionType: actionType,
             actionToken: actionToken,
-            data: data
+            data: data,
+            expired: false
         });
 
         latestProposalIds[msg.sender] = id;
@@ -319,7 +343,19 @@ contract TreasuryDAO is ITreasuryDAO, Ownable, ReentrancyGuard {
         }
     }
 
-    /// @dev Sweep _activeProposalIds: unlock defeated, remove executed/unlocked.
+    /// @notice Refund a succeeded proposal that was never executed within the execution window.
+    ///         Anyone may call once state() returns Expired.
+    function expireProposal(uint256 proposalId) external override {
+        if (proposalId < 1 || proposalId > proposalCount) revert InvalidProposal();
+        if (state(proposalId) != ProposalState.Expired) revert NotExpired();
+        Proposal storage p = _proposals[proposalId];
+        if (p.expired) revert AlreadyExpired();
+        p.expired = true;
+        lockedAmount -= p.amount;
+        emit ProposalExpired(proposalId, p.amount);
+    }
+
+    /// @dev Sweep _activeProposalIds: unlock defeated/expired, remove handled proposals.
     function _cleanupStaleProposals() internal {
         uint256 len = _activeProposalIds.length;
         uint256 i;
@@ -327,8 +363,8 @@ contract TreasuryDAO is ITreasuryDAO, Ownable, ReentrancyGuard {
             uint256 pid = _activeProposalIds[i];
             Proposal storage p = _proposals[pid];
 
-            if (p.executed) {
-                // Already executed or unlocked -- just remove from tracking
+            if (p.executed || p.expired) {
+                // Already handled — just remove from tracking
                 _activeProposalIds[i] = _activeProposalIds[len - 1];
                 _activeProposalIds.pop();
                 len--;
@@ -337,11 +373,19 @@ contract TreasuryDAO is ITreasuryDAO, Ownable, ReentrancyGuard {
 
             ProposalState s = state(pid);
             if (s == ProposalState.Defeated) {
-                // Auto-unlock defeated proposal
                 p.executed = true;
                 lockedAmount -= p.amount;
                 emit FundsUnlocked(pid, p.amount);
                 emit ProposalDefeated(pid);
+                _activeProposalIds[i] = _activeProposalIds[len - 1];
+                _activeProposalIds.pop();
+                len--;
+                continue;
+            }
+            if (s == ProposalState.Expired) {
+                p.expired = true;
+                lockedAmount -= p.amount;
+                emit ProposalExpired(pid, p.amount);
                 _activeProposalIds[i] = _activeProposalIds[len - 1];
                 _activeProposalIds.pop();
                 len--;
@@ -512,6 +556,9 @@ contract TreasuryDAO is ITreasuryDAO, Ownable, ReentrancyGuard {
 
         Proposal storage p = _proposals[proposalId];
 
+        // Explicitly expired (funds already unlocked via expireProposal)
+        if (p.expired) return ProposalState.Expired;
+
         // Already executed (or unlocked-defeated via the reused flag)
         if (p.executed) {
             if (_passesSupermajority(p)) {
@@ -530,6 +577,8 @@ contract TreasuryDAO is ITreasuryDAO, Ownable, ReentrancyGuard {
 
         // Voting ended, not yet executed
         if (_passesSupermajority(p)) {
+            // Execution window passed — anyone can call expireProposal to reclaim funds
+            if (block.timestamp > p.endTime + executionWindow) return ProposalState.Expired;
             return ProposalState.Succeeded;
         }
 
@@ -597,6 +646,30 @@ contract TreasuryDAO is ITreasuryDAO, Ownable, ReentrancyGuard {
         token = _token;
     }
 
+    function setMarketingWallet(address wallet) external override onlyOwner {
+        if (wallet == address(0)) revert ZeroAddress();
+        emit MarketingWalletUpdated(marketingWallet, wallet);
+        marketingWallet = wallet;
+    }
+
+    function setExecutionWindow(uint256 window) external override onlyOwner {
+        if (window < 1 hours || window > 30 days) revert OutOfRange();
+        emit ExecutionWindowUpdated(executionWindow, window);
+        executionWindow = window;
+    }
+
+    function addWhitelistedToken(address tokenAddr) external override onlyOwner {
+        if (tokenAddr == address(0)) revert ZeroAddress();
+        whitelistedTokens[tokenAddr] = true;
+        emit TokenWhitelisted(tokenAddr);
+    }
+
+    function removeWhitelistedToken(address tokenAddr) external override onlyOwner {
+        if (tokenAddr == address(0)) revert ZeroAddress();
+        whitelistedTokens[tokenAddr] = false;
+        emit TokenRemovedFromWhitelist(tokenAddr);
+    }
+
     // ---------------------------------------------------------------
     //  Presets
     // ---------------------------------------------------------------
@@ -613,12 +686,16 @@ contract TreasuryDAO is ITreasuryDAO, Ownable, ReentrancyGuard {
 
         // Per-type validation (same rules as proposals)
         if (actionType == ActionType.SendPLS) {
-            if (target == address(0)) revert TargetRequired();
+            if (marketingWallet == address(0)) revert MarketingWalletNotSet();
+            target = marketingWallet;
         } else if (actionType == ActionType.BuyAndBurn) {
             if (actionToken == address(0)) revert ActionTokenRequired();
             if (actionToken == wpls) revert ActionTokenCannotBeWPLS();
+            if (!whitelistedTokens[actionToken]) revert TokenNotWhitelisted();
         } else if (actionType == ActionType.AddAndBurnLP) {
             if (actionToken == address(0)) revert ActionTokenRequired();
+            if (!whitelistedTokens[actionToken]) revert TokenNotWhitelisted();
+            if (target != address(0) && !whitelistedTokens[target]) revert TokenNotWhitelisted();
         } else if (actionType == ActionType.Custom) {
             if (target == address(0)) revert TargetRequired();
             if (data.length == 0) revert DataRequired();

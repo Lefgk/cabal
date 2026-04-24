@@ -221,6 +221,8 @@ contract TreasuryDAOTest is Test {
         );
 
         vault.setDaoAddress(address(dao));
+        dao.setMarketingWallet(bob);
+        dao.addWhitelistedToken(address(burnToken));
 
         // Make 6 stakers so we can hit minVoters=5 in tests
         _stakeAs(alice, 100e18);
@@ -348,10 +350,13 @@ contract TreasuryDAOTest is Test {
         dao.propose(100e18, bob, "", ITreasuryDAO.ActionType.SendPLS, address(0), "");
     }
 
-    function test_propose_revertsZeroTarget() public {
+    function test_propose_sendPLS_overridesTarget() public {
+        // Even though we pass a random target, it should be overridden with marketingWallet
+        address randomTarget = makeAddr("randomTarget");
         vm.prank(alice);
-        vm.expectRevert(TreasuryDAO.TargetRequired.selector);
-        dao.propose(100e18, address(0), "send funds", ITreasuryDAO.ActionType.SendPLS, address(0), "");
+        uint256 id = dao.propose(100e18, randomTarget, "send funds", ITreasuryDAO.ActionType.SendPLS, address(0), "");
+        ITreasuryDAO.Proposal memory p = dao.proposals(id);
+        assertEq(p.target, bob, "target should be marketingWallet (bob), not the passed address");
     }
 
     function test_propose_revertsInsufficientBalance() public {
@@ -694,12 +699,12 @@ contract TreasuryDAOTest is Test {
     // ---------------------------------------------------------------
 
     function test_execute_transfersPLS() public {
-        address target = makeAddr("targetWallet");
-        uint256 id = _proposeAndPass(200e18, target, "marketing spend");
+        // SendPLS always sends to marketingWallet regardless of passed target
+        uint256 id = _proposeAndPass(200e18, address(0), "marketing spend");
 
-        uint256 balBefore = target.balance;
+        uint256 balBefore = bob.balance; // bob is marketingWallet
         dao.executeProposal(id);
-        assertEq(target.balance, balBefore + 200e18);
+        assertEq(bob.balance, balBefore + 200e18);
     }
 
     function test_execute_unlocksFunds() public {
@@ -1034,13 +1039,13 @@ contract TreasuryDAOTest is Test {
     }
 
     function test_execute_reducesDaoBalance() public {
-        address target = makeAddr("t3");
-        uint256 id = _proposeAndPass(250e18, target, "spend");
+        uint256 id = _proposeAndPass(250e18, address(0), "spend");
 
         uint256 daoBefore = address(dao).balance;
+        uint256 mktBefore = bob.balance; // bob is marketingWallet
         dao.executeProposal(id);
         assertEq(address(dao).balance, daoBefore - 250e18);
-        assertEq(target.balance, 250e18);
+        assertEq(bob.balance, mktBefore + 250e18);
     }
 
     // ---------------------------------------------------------------
@@ -1240,6 +1245,7 @@ contract TreasuryDAOTest is Test {
     function test_buyAndBurn_execute_fallbackToDead_whenNoBurn() public {
         // Deploy a token without burn() — plain ERC20
         MockNoBurnToken noBurnToken = new MockNoBurnToken();
+        dao.addWhitelistedToken(address(noBurnToken));
         mockRouter.setOutputToken(address(noBurnToken));
 
         uint256 id = _proposeAndPassAction(
@@ -1418,6 +1424,7 @@ contract TreasuryDAOTest is Test {
 
     function test_addAndBurnLP_tokenToken_propose() public {
         MockERC20 tokenB = new MockERC20("TokenB", "TKB");
+        dao.addWhitelistedToken(address(tokenB));
 
         vm.prank(alice);
         uint256 id = dao.propose(
@@ -1432,6 +1439,7 @@ contract TreasuryDAOTest is Test {
 
     function test_addAndBurnLP_tokenToken_execute() public {
         MockERC20 tokenB = new MockERC20("TokenB", "TKB");
+        dao.addWhitelistedToken(address(tokenB));
 
         uint256 id = _proposeAndPassAction(
             100e18, address(tokenB), "LP burn token/token",
@@ -1509,9 +1517,8 @@ contract TreasuryDAOTest is Test {
         vm.expectRevert(TreasuryDAO.ActionTokenRequired.selector);
         dao.addPreset("bad", ITreasuryDAO.ActionType.BuyAndBurn, address(0), address(0), "");
 
-        // SendWPLS requires target
-        vm.expectRevert(TreasuryDAO.TargetRequired.selector);
-        dao.addPreset("bad", ITreasuryDAO.ActionType.SendPLS, address(0), address(0), "");
+        // SendPLS with marketing wallet set should succeed (target is overridden)
+        // Tested separately in test_sendPLS_preset_overridesTarget
 
         // Custom requires target + data
         vm.expectRevert(TreasuryDAO.TargetRequired.selector);
@@ -1640,6 +1647,7 @@ contract TreasuryDAOTest is Test {
 
     function test_proposeFromPreset_tokenTokenLP() public {
         MockERC20 tokenB = new MockERC20("TokenB", "TKB");
+        dao.addWhitelistedToken(address(tokenB));
         dao.addPreset(
             "OMEGA/HEX LP Burn",
             ITreasuryDAO.ActionType.AddAndBurnLP,
@@ -1657,6 +1665,282 @@ contract TreasuryDAOTest is Test {
         assertEq(mockRouter.lastLPTo(), DEAD);
         assertEq(mockRouter.lastLiqTokenA(), address(burnToken));
         assertEq(mockRouter.lastLiqTokenB(), address(tokenB));
+    }
+
+    // ---------------------------------------------------------------
+    //  Marketing Wallet
+    // ---------------------------------------------------------------
+
+    function test_setMarketingWallet_basic() public {
+        address newWallet = makeAddr("newMarketing");
+        vm.expectEmit(true, true, false, true, address(dao));
+        emit ITreasuryDAO.MarketingWalletUpdated(bob, newWallet);
+        dao.setMarketingWallet(newWallet);
+        assertEq(dao.marketingWallet(), newWallet);
+    }
+
+    function test_setMarketingWallet_revertsZeroAddress() public {
+        vm.expectRevert(TreasuryDAO.ZeroAddress.selector);
+        dao.setMarketingWallet(address(0));
+    }
+
+    function test_setMarketingWallet_revertsNonOwner() public {
+        vm.prank(alice);
+        vm.expectRevert();
+        dao.setMarketingWallet(makeAddr("wallet"));
+    }
+
+    function test_sendPLS_revertsWithoutMarketingWallet() public {
+        // Deploy a fresh DAO, then clear marketing wallet to test the guard
+        TreasuryDAO freshDao = new TreasuryDAO(
+            address(vault), address(cabalToken), address(wplsToken), address(mockRouter)
+        );
+        // Constructor sets a default marketing wallet; clear it via setMarketingWallet
+        // Can't set to zero via setter (reverts), so we prank storage directly
+        vm.store(address(freshDao), bytes32(uint256(4)), bytes32(0));
+        assertEq(freshDao.marketingWallet(), address(0));
+
+        vm.deal(address(freshDao), 1000e18);
+
+        vm.prank(alice);
+        vm.expectRevert(TreasuryDAO.MarketingWalletNotSet.selector);
+        freshDao.propose(100e18, bob, "send funds", ITreasuryDAO.ActionType.SendPLS, address(0), "");
+    }
+
+    function test_sendPLS_executeSendsToMarketingWallet() public {
+        // Set a dedicated marketing wallet
+        address mktWallet = makeAddr("mktWallet");
+        dao.setMarketingWallet(mktWallet);
+
+        uint256 balBefore = mktWallet.balance;
+
+        // Propose — alice passes address(0) as target, but it gets overridden
+        uint256 id = _proposeAndPass(100e18, address(0), "marketing spend");
+
+        dao.executeProposal(id);
+
+        assertEq(mktWallet.balance, balBefore + 100e18, "PLS should go to marketingWallet");
+    }
+
+    function test_sendPLS_preset_overridesTarget() public {
+        address mktWallet = makeAddr("mktWallet");
+        dao.setMarketingWallet(mktWallet);
+
+        // addPreset with random target — should be overridden
+        uint256 presetId = dao.addPreset(
+            "Send to marketing", ITreasuryDAO.ActionType.SendPLS, address(0), makeAddr("random"), ""
+        );
+
+        ITreasuryDAO.Preset memory preset = dao.getPreset(presetId);
+        assertEq(preset.target, mktWallet, "preset target should be overridden to marketingWallet");
+
+        // Also test proposeFromPreset
+        vm.prank(alice);
+        uint256 id = dao.proposeFromPreset(presetId, 50e18, "from preset");
+        ITreasuryDAO.Proposal memory p = dao.proposals(id);
+        assertEq(p.target, mktWallet, "proposal target should be marketingWallet");
+    }
+
+    // ---------------------------------------------------------------
+    //  Execution Window / Expiry
+    // ---------------------------------------------------------------
+
+    function test_state_succeededWithinWindow() public {
+        uint256 id = _proposeAndPass(50e18, bob, "spend");
+        // Just past voting end, within execution window — should be Succeeded
+        assertEq(uint256(dao.state(id)), uint256(ITreasuryDAO.ProposalState.Succeeded));
+    }
+
+    function test_state_expiredAfterWindow() public {
+        uint256 id = _proposeAndPass(50e18, bob, "spend");
+        // Past voting end + execution window
+        vm.warp(block.timestamp + dao.executionWindow() + 1);
+        assertEq(uint256(dao.state(id)), uint256(ITreasuryDAO.ProposalState.Expired));
+    }
+
+    function test_executeProposal_revertsAfterExpiryWindow() public {
+        uint256 id = _proposeAndPass(50e18, bob, "spend");
+        vm.warp(block.timestamp + dao.executionWindow() + 1);
+        vm.expectRevert(TreasuryDAO.NotSucceeded.selector);
+        dao.executeProposal(id);
+    }
+
+    function test_expireProposal_happyPath() public {
+        uint256 id = _proposeAndPass(300e18, bob, "spend");
+        assertEq(dao.lockedAmount(), 300e18);
+
+        vm.warp(block.timestamp + dao.executionWindow() + 1);
+        dao.expireProposal(id);
+
+        assertEq(dao.lockedAmount(), 0);
+        assertEq(dao.availableBalance(), 1000e18);
+        assertEq(uint256(dao.state(id)), uint256(ITreasuryDAO.ProposalState.Expired));
+    }
+
+    function test_expireProposal_anyoneCanCall() public {
+        uint256 id = _proposeAndPass(50e18, bob, "spend");
+        vm.warp(block.timestamp + dao.executionWindow() + 1);
+        vm.prank(nonStaker);
+        dao.expireProposal(id);
+        assertEq(uint256(dao.state(id)), uint256(ITreasuryDAO.ProposalState.Expired));
+    }
+
+    function test_expireProposal_revertsBeforeWindowEnds() public {
+        uint256 id = _proposeAndPass(50e18, bob, "spend");
+        // Still within execution window
+        vm.expectRevert(TreasuryDAO.NotExpired.selector);
+        dao.expireProposal(id);
+    }
+
+    function test_expireProposal_revertsIfDefeated() public {
+        uint256 id = _propose(alice, 50e18, bob, "spend");
+        vm.warp(block.timestamp + 7 days + 1);
+        // Defeated proposal is not Expired
+        vm.expectRevert(TreasuryDAO.NotExpired.selector);
+        dao.expireProposal(id);
+    }
+
+    function test_expireProposal_revertsAlreadyExpired() public {
+        uint256 id = _proposeAndPass(50e18, bob, "spend");
+        vm.warp(block.timestamp + dao.executionWindow() + 1);
+        dao.expireProposal(id);
+        vm.expectRevert(TreasuryDAO.AlreadyExpired.selector);
+        dao.expireProposal(id);
+    }
+
+    function test_expireProposal_emitsEvent() public {
+        uint256 id = _proposeAndPass(50e18, bob, "spend");
+        vm.warp(block.timestamp + dao.executionWindow() + 1);
+        vm.expectEmit(true, false, false, true, address(dao));
+        emit ITreasuryDAO.ProposalExpired(id, 50e18);
+        dao.expireProposal(id);
+    }
+
+    function test_expireProposal_freesBalanceForNewProposal() public {
+        uint256 id1 = _proposeAndPass(800e18, bob, "spend");
+        vm.warp(block.timestamp + dao.executionWindow() + 1);
+        dao.expireProposal(id1);
+
+        assertEq(dao.availableBalance(), 1000e18);
+
+        vm.prank(bob);
+        uint256 id2 = dao.propose(700e18, carol, "reuse", ITreasuryDAO.ActionType.SendPLS, address(0), "");
+        assertEq(id2, 2);
+    }
+
+    function test_cleanupStaleProposals_autoExpiresOnNextPropose() public {
+        // Proposal passes but nobody executes it — execution window expires
+        uint256 id1 = _proposeAndPass(500e18, bob, "spend");
+        assertEq(dao.lockedAmount(), 500e18);
+
+        vm.warp(block.timestamp + dao.executionWindow() + 1);
+
+        // Next propose triggers cleanup which auto-expires id1
+        vm.prank(bob);
+        dao.propose(100e18, carol, "new proposal", ITreasuryDAO.ActionType.SendPLS, address(0), "");
+
+        assertEq(dao.lockedAmount(), 100e18); // id1's 500e18 was freed
+    }
+
+    function test_setExecutionWindow_basic() public {
+        dao.setExecutionWindow(3 days);
+        assertEq(dao.executionWindow(), 3 days);
+    }
+
+    function test_setExecutionWindow_revertsOutOfRange() public {
+        vm.expectRevert(TreasuryDAO.OutOfRange.selector);
+        dao.setExecutionWindow(0);
+        vm.expectRevert(TreasuryDAO.OutOfRange.selector);
+        dao.setExecutionWindow(31 days);
+    }
+
+    function test_setExecutionWindow_revertsNonOwner() public {
+        vm.prank(alice);
+        vm.expectRevert();
+        dao.setExecutionWindow(3 days);
+    }
+
+    // ---------------------------------------------------------------
+    //  Token Whitelist
+    // ---------------------------------------------------------------
+
+    function test_whitelist_addToken() public {
+        MockERC20 newToken = new MockERC20("New", "NEW");
+        assertFalse(dao.whitelistedTokens(address(newToken)));
+        dao.addWhitelistedToken(address(newToken));
+        assertTrue(dao.whitelistedTokens(address(newToken)));
+    }
+
+    function test_whitelist_removeToken() public {
+        MockERC20 newToken = new MockERC20("New", "NEW");
+        dao.addWhitelistedToken(address(newToken));
+        dao.removeWhitelistedToken(address(newToken));
+        assertFalse(dao.whitelistedTokens(address(newToken)));
+    }
+
+    function test_whitelist_addToken_emitsEvent() public {
+        MockERC20 newToken = new MockERC20("New", "NEW");
+        vm.expectEmit(true, false, false, false, address(dao));
+        emit ITreasuryDAO.TokenWhitelisted(address(newToken));
+        dao.addWhitelistedToken(address(newToken));
+    }
+
+    function test_whitelist_removeToken_emitsEvent() public {
+        MockERC20 newToken = new MockERC20("New", "NEW");
+        dao.addWhitelistedToken(address(newToken));
+        vm.expectEmit(true, false, false, false, address(dao));
+        emit ITreasuryDAO.TokenRemovedFromWhitelist(address(newToken));
+        dao.removeWhitelistedToken(address(newToken));
+    }
+
+    function test_whitelist_addToken_revertsZeroAddress() public {
+        vm.expectRevert(TreasuryDAO.ZeroAddress.selector);
+        dao.addWhitelistedToken(address(0));
+    }
+
+    function test_whitelist_addToken_revertsNonOwner() public {
+        vm.prank(alice);
+        vm.expectRevert();
+        dao.addWhitelistedToken(address(burnToken));
+    }
+
+    function test_whitelist_removeToken_revertsNonOwner() public {
+        vm.prank(alice);
+        vm.expectRevert();
+        dao.removeWhitelistedToken(address(burnToken));
+    }
+
+    function test_whitelist_buyAndBurn_revertsNotWhitelisted() public {
+        MockERC20 unlisted = new MockERC20("Unlisted", "UNL");
+        vm.prank(alice);
+        vm.expectRevert(TreasuryDAO.TokenNotWhitelisted.selector);
+        dao.propose(100e18, address(0), "buy unlisted", ITreasuryDAO.ActionType.BuyAndBurn, address(unlisted), "");
+    }
+
+    function test_whitelist_buyAndBurn_succeedsWhenWhitelisted() public {
+        vm.prank(alice);
+        uint256 id = dao.propose(100e18, address(0), "buy burn", ITreasuryDAO.ActionType.BuyAndBurn, address(burnToken), "");
+        assertEq(id, 1);
+    }
+
+    function test_whitelist_addAndBurnLP_revertsTokenANotWhitelisted() public {
+        MockERC20 unlisted = new MockERC20("Unlisted", "UNL");
+        vm.prank(alice);
+        vm.expectRevert(TreasuryDAO.TokenNotWhitelisted.selector);
+        dao.propose(100e18, address(0), "lp unlisted", ITreasuryDAO.ActionType.AddAndBurnLP, address(unlisted), "");
+    }
+
+    function test_whitelist_addAndBurnLP_tokenToken_revertsTokenBNotWhitelisted() public {
+        MockERC20 tokenB = new MockERC20("TokenB", "TKB"); // not whitelisted
+        vm.prank(alice);
+        vm.expectRevert(TreasuryDAO.TokenNotWhitelisted.selector);
+        dao.propose(100e18, address(tokenB), "lp token/token", ITreasuryDAO.ActionType.AddAndBurnLP, address(burnToken), "");
+    }
+
+    function test_whitelist_preset_revertsNotWhitelisted() public {
+        MockERC20 unlisted = new MockERC20("Unlisted", "UNL");
+        vm.expectRevert(TreasuryDAO.TokenNotWhitelisted.selector);
+        dao.addPreset("bad preset", ITreasuryDAO.ActionType.BuyAndBurn, address(unlisted), address(0), "");
     }
 
     // ---------------------------------------------------------------

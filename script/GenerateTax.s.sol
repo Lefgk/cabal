@@ -10,7 +10,6 @@ interface IRouter {
     function swapExactTokensForETHSupportingFeeOnTransferTokens(
         uint256 amountIn, uint256 amountOutMin, address[] calldata path, address to, uint256 deadline
     ) external;
-    function WPLS() external pure returns (address);
 }
 
 interface IERC20 {
@@ -18,59 +17,56 @@ interface IERC20 {
     function approve(address, uint256) external returns (bool);
 }
 
-/// @notice Buy then sell TSTT from a non-owner wallet to generate tax.
+/// @notice Buy then sell TSTT from a NON-OWNER wallet to generate tax.
 contract GenerateTaxScript is Script {
-    address constant PULSEX_ROUTER = 0x165C3410fC91EF562C50559f7d2289fEbed552d9;
-    address constant WPLS          = 0xA1077a294dDE1B09bB078844df40758a5D0f9a27;
-    address constant TSTT          = 0x1745A8154C134840e4D4F6A84dD109902d52A33b;
-    address constant NEW_VAULT     = 0x7EB99faBE537dc4a2C8685291F72c7772FD1528C;
-    address constant NEW_DAO       = 0xdFF5792C57Cd36D4705ed5c2c39823eE42FB5dEa;
+    address constant ROUTER = 0x165C3410fC91EF562C50559f7d2289fEbed552d9;
+    address constant WPLS   = 0xA1077a294dDE1B09bB078844df40758a5D0f9a27;
+    address constant TOKEN  = 0xFbA28dA172e60E9CA50985C51E3772f715FAba20;
+    address constant VAULT  = 0x1DdDfF8D36bb2561119868C2D5C2E99F50ED0843;
+    address constant DAO    = 0xF34769d1Df2bd2F6738cE5CaeaCF09b565E36992;
 
-    uint256 constant BUY_AMOUNT = 1000 ether; // 1000 PLS
+    uint256 constant BUY_AMOUNT = 50_000 ether; // 50K PLS
 
     function run() external {
-        uint256 pk = vm.envUint("pk");
+        uint256 pk = vm.envUint("pk"); // dev wallet — NOT tax excluded
         address bcast = vm.addr(pk);
 
         console.log("=== GENERATE TAX (non-owner) ===");
-        console.log("broadcaster:", bcast);
+        console.log("wallet:", bcast);
 
-        uint256 vaultPlsBefore = NEW_VAULT.balance;
-        uint256 daoWplsBefore = IERC20(WPLS).balanceOf(NEW_DAO);
+        uint256 vaultPlsBefore = VAULT.balance;
+        uint256 daoPlsBefore   = DAO.balance;
 
         vm.startBroadcast(pk);
 
-        // 1. Buy TSTT with PLS (triggers buy tax)
+        // 1. Buy TSTT
         address[] memory buyPath = new address[](2);
         buyPath[0] = WPLS;
-        buyPath[1] = TSTT;
-
-        IRouter(PULSEX_ROUTER).swapExactETHForTokensSupportingFeeOnTransferTokens{value: BUY_AMOUNT}(
+        buyPath[1] = TOKEN;
+        IRouter(ROUTER).swapExactETHForTokensSupportingFeeOnTransferTokens{value: BUY_AMOUNT}(
             0, buyPath, bcast, block.timestamp + 300
         );
-        uint256 tsttBal = IERC20(TSTT).balanceOf(bcast);
-        console.log("TSTT balance after buy:", tsttBal);
+        uint256 tsttBal = IERC20(TOKEN).balanceOf(bcast);
+        console.log("TSTT bought:", tsttBal);
 
-        // 2. Sell same amount back (triggers sell tax)
-        IERC20(TSTT).approve(PULSEX_ROUTER, tsttBal);
-
+        // 2. Sell all back
+        IERC20(TOKEN).approve(ROUTER, tsttBal);
         address[] memory sellPath = new address[](2);
-        sellPath[0] = TSTT;
+        sellPath[0] = TOKEN;
         sellPath[1] = WPLS;
-
-        IRouter(PULSEX_ROUTER).swapExactTokensForETHSupportingFeeOnTransferTokens(
+        IRouter(ROUTER).swapExactTokensForETHSupportingFeeOnTransferTokens(
             tsttBal, 0, sellPath, bcast, block.timestamp + 300
         );
-        console.log("Sold TSTT back");
+        console.log("sold all back");
 
         vm.stopBroadcast();
 
-        uint256 vaultPlsAfter = NEW_VAULT.balance;
-        uint256 daoWplsAfter = IERC20(WPLS).balanceOf(NEW_DAO);
+        uint256 vaultPlsAfter = VAULT.balance;
+        uint256 daoPlsAfter   = DAO.balance;
 
         console.log("");
-        console.log("=== TAX GENERATED ===");
-        console.log("Vault PLS received:", vaultPlsAfter - vaultPlsBefore);
-        console.log("DAO WPLS received: ", daoWplsAfter - daoWplsBefore);
+        console.log("=== TAX RESULTS ===");
+        console.log("vault PLS received:", vaultPlsAfter - vaultPlsBefore);
+        console.log("DAO PLS received:  ", daoPlsAfter - daoPlsBefore);
     }
 }
