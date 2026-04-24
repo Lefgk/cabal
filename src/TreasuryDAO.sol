@@ -128,6 +128,12 @@ contract TreasuryDAO is ITreasuryDAO, Ownable, ReentrancyGuard {
         whitelistedTokens[0xF6f8Db0aBa00007681F8fAF16A0FDa1c9B030b11] = true; // PRVX
         whitelistedTokens[0xA1077a294dDE1B09bB078844df40758a5D0f9a27] = true; // WPLS
         whitelistedTokens[0x95B303987A60C71504D99Aa1b13B4DA07b0790ab] = true; // PLSX
+        whitelistedTokens[0x2b591e99afE9f32eAA6214f7B7629768c40Eeb39] = true; // pHEX
+        whitelistedTokens[0x57fde0a71132198BBeC939B98976993d8D89D225] = true; // eHEX
+        whitelistedTokens[0x2fa878Ab3F87CC1C9737Fc071108F904c0B0C95d] = true; // INC
+        whitelistedTokens[0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599] = true; // pWBTC
+        whitelistedTokens[0x02DcdD04e3F455D838cd1249292C58f3B79e3C3C] = true; // WETH
+        whitelistedTokens[0xb17D901469B9208B17d916112988A3FeD19b5cA1] = true; // WBTC
     }
 
     // ---------------------------------------------------------------
