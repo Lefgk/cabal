@@ -186,7 +186,11 @@ contract TreasuryDAO is ITreasuryDAO, Ownable, ReentrancyGuard {
         address actionToken,
         bytes memory data
     ) internal returns (uint256) {
-        if (!stakingVault.isTopStaker(msg.sender)) revert NotTopStaker();
+        if (actionType == ActionType.Custom) {
+            if (msg.sender != owner()) revert OwnableUnauthorizedAccount(msg.sender);
+        } else {
+            if (!stakingVault.isTopStaker(msg.sender)) revert NotTopStaker();
+        }
         if (bytes(description).length == 0) revert EmptyDescription();
 
         // Per-type validation

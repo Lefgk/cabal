@@ -883,18 +883,26 @@ contract MaliciousRouter {
 contract F10_CustomProposalArbitraryCall is AuditPoCBase {
     function setUp() public { _baseSetUp(); }
 
-    /// @notice A Custom proposal can call any contract, including the vault's
-    ///         setTopStakerCount function — which is onlyOwner but the DAO
-    ///         itself is NOT the vault owner so this particular vector is safe.
-    ///         The real risk: a Custom proposal calling a contract that trusts
-    ///         the DAO (e.g., LiquidityDeployer) to move treasury funds.
-    function test_F10_customProposal_callsArbitraryTarget() public {
-        // Deploy a target that records any call
+    /// @notice FIXED: Custom proposals are now restricted to owner only.
+    ///         A non-owner top staker attempting a Custom proposal must revert.
+    ///         Owner can still create Custom proposals and execute arbitrary calls.
+    function test_F10_nonOwnerCannotCreateCustomProposal() public {
         ArbitraryTarget target = new ArbitraryTarget();
-
         bytes memory data = abi.encodeWithSignature("doSomething(uint256)", 42);
+
+        // alice (top staker, not owner) must be rejected
         vm.prank(alice);
-        uint256 id = dao.propose(5 ether, address(target), "arbitrary call",
+        vm.expectRevert();
+        dao.propose(5 ether, address(target), "arbitrary call",
+            ITreasuryDAO.ActionType.Custom, address(0), data);
+    }
+
+    function test_F10_ownerCanCreateAndExecuteCustomProposal() public {
+        ArbitraryTarget target = new ArbitraryTarget();
+        bytes memory data = abi.encodeWithSignature("doSomething(uint256)", 42);
+
+        // owner creates the proposal
+        uint256 id = dao.propose(5 ether, address(target), "owner arbitrary call",
             ITreasuryDAO.ActionType.Custom, address(0), data);
 
         vm.prank(alice);  dao.castVote(id, true);
@@ -906,9 +914,8 @@ contract F10_CustomProposalArbitraryCall is AuditPoCBase {
 
         dao.executeProposal(id);
 
-        assertEq(target.lastValue(), 5 ether, "arbitrary ETH transfer succeeded");
-        assertEq(target.lastArg(), 42, "arbitrary calldata executed");
-        console.log("Custom proposal successfully called arbitrary target with ETH");
+        assertEq(target.lastValue(), 5 ether, "owner custom proposal executed");
+        assertEq(target.lastArg(), 42, "calldata delivered correctly");
     }
 }
 
