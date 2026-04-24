@@ -416,6 +416,9 @@ export const TREASURY_DAO_ABI = [
       { name: 'amount', type: 'uint256' },
       { name: 'target', type: 'address' },
       { name: 'description', type: 'string' },
+      { name: 'actionType', type: 'uint8' },
+      { name: 'actionToken', type: 'address' },
+      { name: 'data', type: 'bytes' },
     ],
     outputs: [{ name: '', type: 'uint256' }],
   },
@@ -437,13 +440,6 @@ export const TREASURY_DAO_ABI = [
     outputs: [],
   },
   // Treasury
-  {
-    name: 'depositWPLS',
-    type: 'function',
-    stateMutability: 'nonpayable',
-    inputs: [{ name: 'amount', type: 'uint256' }],
-    outputs: [],
-  },
   {
     name: 'availableBalance',
     type: 'function',
@@ -472,6 +468,11 @@ export const TREASURY_DAO_ABI = [
           { name: 'startTime', type: 'uint256' },
           { name: 'endTime', type: 'uint256' },
           { name: 'executed', type: 'bool' },
+          { name: 'voters', type: 'uint256' },
+          { name: 'actionType', type: 'uint8' },
+          { name: 'actionToken', type: 'address' },
+          { name: 'data', type: 'bytes' },
+          { name: 'expired', type: 'bool' },
         ],
       },
     ],
@@ -519,7 +520,14 @@ export const TREASURY_DAO_ABI = [
     outputs: [{ name: '', type: 'uint256' }],
   },
   {
-    name: 'quorumBps',
+    name: 'supermajorityPct',
+    type: 'function',
+    stateMutability: 'view',
+    inputs: [],
+    outputs: [{ name: '', type: 'uint256' }],
+  },
+  {
+    name: 'minVoters',
     type: 'function',
     stateMutability: 'view',
     inputs: [],
@@ -533,21 +541,14 @@ export const TREASURY_DAO_ABI = [
     outputs: [{ name: '', type: 'uint256' }],
   },
   {
+    name: 'whitelistedTokens',
+    type: 'function',
+    stateMutability: 'view',
+    inputs: [{ name: 'token', type: 'address' }],
+    outputs: [{ name: '', type: 'bool' }],
+  },
+  {
     name: 'token',
-    type: 'function',
-    stateMutability: 'view',
-    inputs: [],
-    outputs: [{ name: '', type: 'address' }],
-  },
-  {
-    name: 'wpls',
-    type: 'function',
-    stateMutability: 'view',
-    inputs: [],
-    outputs: [{ name: '', type: 'address' }],
-  },
-  {
-    name: 'dexRouter',
     type: 'function',
     stateMutability: 'view',
     inputs: [],
@@ -567,7 +568,6 @@ export const TREASURY_DAO_ABI = [
     inputs: [
       { name: 'proposalId', type: 'uint256', indexed: true },
       { name: 'proposer', type: 'address', indexed: true },
-      { name: 'pType', type: 'uint8', indexed: false },
       { name: 'amount', type: 'uint256', indexed: false },
       { name: 'target', type: 'address', indexed: false },
       { name: 'description', type: 'string', indexed: false },
@@ -590,10 +590,19 @@ export const TREASURY_DAO_ABI = [
     type: 'event',
     inputs: [
       { name: 'proposalId', type: 'uint256', indexed: true },
-      { name: 'pType', type: 'uint8', indexed: false },
       { name: 'amount', type: 'uint256', indexed: false },
       { name: 'target', type: 'address', indexed: false },
     ],
+  },
+  {
+    name: 'TokenWhitelisted',
+    type: 'event',
+    inputs: [{ name: 'token', type: 'address', indexed: true }],
+  },
+  {
+    name: 'TokenRemovedFromWhitelist',
+    type: 'event',
+    inputs: [{ name: 'token', type: 'address', indexed: true }],
   },
 ];
 
