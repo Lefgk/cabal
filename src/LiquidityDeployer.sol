@@ -46,7 +46,7 @@ contract LiquidityDeployer is Ownable, ReentrancyGuard {
     /// @notice Swap PLS for token(s) and add liquidity on PulseX. LP burned to DEAD.
     /// @param tokenA First token (required).
     /// @param tokenB Second token, or address(0) for a tokenA/PLS pair.
-    function addLiquidity(address tokenA, address tokenB) external payable nonReentrant {
+    function addLiquidity(address tokenA, address tokenB) external payable onlyOwner nonReentrant {
         require(msg.value > 0, "zero value");
         require(tokenA != address(0), "zero tokenA");
 

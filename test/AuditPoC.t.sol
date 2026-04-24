@@ -532,30 +532,20 @@ contract F04_LiquidityDeployerPermissionless is AuditPoCBase {
         router.setOutputToken(address(honeypot));
     }
 
-    /// @notice Anyone — not just the DAO — can call addLiquidity() on the deployer.
-    ///         An attacker sends ETH and forces liquidity to be added to a
-    ///         honeypot token pair, burning the LP. The contract has no access control.
+    /// @notice FIXED: addLiquidity is now onlyOwner.
+    ///         Non-owner callers must revert.
     function test_F04_anyoneCanCallAddLiquidity() public {
-        // Fund the deployer with some PLS (simulating prior DAO deposit)
-        vm.deal(address(ld), 10 ether);
-
-        // Attacker calls addLiquidity with a honeypot token — no permission check
         vm.deal(attacker, 1 ether);
         vm.prank(attacker);
+        vm.expectRevert();
         ld.addLiquidity{value: 1 ether}(address(honeypot), address(0));
-
-        // LP was "burned" (sent to DEAD) — value is lost
-        // The test succeeds (no revert), confirming anyone can trigger this.
-        console.log("LiquidityDeployer accepted call from arbitrary attacker");
-        assertTrue(true, "no access control on addLiquidity - anyone can call");
     }
 
-    /// @notice Confirm the DAO itself has no exclusive claim; the deployer
-    ///         does not verify msg.sender at all.
+    /// @notice Owner can still call addLiquidity.
     function test_F04_daoNotRequiredAsCaller() public {
         vm.deal(address(this), 5 ether);
         ld.addLiquidity{value: 5 ether}(address(honeypot), address(0));
-        assertTrue(true, "caller identity not checked");
+        assertTrue(true, "owner can call addLiquidity");
     }
 }
 
