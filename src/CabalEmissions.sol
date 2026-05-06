@@ -448,19 +448,27 @@ contract CabalEmissions is ReentrancyGuard, Ownable {
 
     /// @notice Mass-harvest pending TSTT (and pull/sweep INC from any PULSEX pass-through pools)
     ///         across every pool in one call. Sweeps INC once at the end to amortise gas.
+    /// @dev Skips pools where the caller has no stake — those pools have no rewards to settle
+    ///      and no INC to claim from PXMC for this user. Other stakers still see correct
+    ///      pendingReward() because `_multiplier(lastRewardTime, block.timestamp)` is preserved.
     function harvestAll() external nonReentrant {
+        bool anyExternal;
         uint256 n = poolInfo.length;
         for (uint256 i = 0; i < n; i++) {
-            PoolInfo storage pool = poolInfo[i];
             UserInfo storage user = userInfo[i][msg.sender];
+            if (user.amount == 0) continue;
+            PoolInfo storage pool = poolInfo[i];
 
-            _externalChefHarvest(pool);
+            if (pool.externalProtocol == ExternalProtocol.PULSEX && PULSEX_MC != address(0)) {
+                IExternalChef(PULSEX_MC).deposit(pool.externalPid, 0);
+                anyExternal = true;
+            }
 
             updatePool(i);
             _settlePending(pool, user, msg.sender);
             user.rewardDebt = (user.amount * pool.accTokensPerShare) / 1e18;
         }
-        _sweepInc();
+        if (anyExternal) _sweepInc();
     }
 
     function emergencyWithdraw(uint256 _pid) external nonReentrant {

@@ -64,6 +64,10 @@ contract TieredStakingVault is Ownable, ReentrancyGuard {
 
     uint256 public constant MAX_LOCKS_PER_USER = 50;
 
+    /// @dev Floor under which auto-drip is skipped — avoids paying ~150k extra gas
+    ///      per user action just to swap dust through the router.
+    uint256 public constant MIN_AUTO_DRIP_PLS = 100 ether;
+
     /// @dev Precision multiplier for rewardPerToken accumulator. Large enough to
     ///      avoid truncation when reward token has fewer decimals than staking token.
     uint256 internal constant PRECISION = 1e30;
@@ -131,6 +135,18 @@ contract TieredStakingVault is Ownable, ReentrancyGuard {
     // ─────────────── Modifiers ───────────────
     modifier notPaused() {
         if (paused) revert IsPaused();
+        _;
+    }
+
+    /// @dev Opportunistically drains accumulated PLS (Flux 4.25% tax leg, EES fallback PLS,
+    ///      etc.) into a fresh pDAI drip on every state-changing user call. Wrapped in
+    ///      try/catch via the self-only `_fallbackPlsToRewards` so a router failure cannot
+    ///      brick stakes/withdrawals. Skipped below MIN_AUTO_DRIP_PLS to avoid swapping dust.
+    modifier autoDrip() {
+        uint256 plsBal = address(this).balance;
+        if (plsBal >= MIN_AUTO_DRIP_PLS && address(dexRouter) != address(0)) {
+            try this._fallbackPlsToRewards(plsBal) {} catch {}
+        }
         _;
     }
 
@@ -235,7 +251,7 @@ contract TieredStakingVault is Ownable, ReentrancyGuard {
     }
 
     // ─────────────── Stake (flex) ───────────────
-    function stake(uint256 amount) external nonReentrant notPaused updateReward(msg.sender) {
+    function stake(uint256 amount) external nonReentrant notPaused updateReward(msg.sender) autoDrip {
         if (amount == 0) revert ZeroAmount();
         uint256 received = _pullStaking(msg.sender, amount);
 
@@ -249,7 +265,7 @@ contract TieredStakingVault is Ownable, ReentrancyGuard {
         emit Staked(msg.sender, received, addEff);
     }
 
-    function withdraw(uint256 amount) public nonReentrant updateReward(msg.sender) {
+    function withdraw(uint256 amount) public nonReentrant updateReward(msg.sender) autoDrip {
         if (amount == 0) revert ZeroAmount();
         uint256 bal = flexBalance[msg.sender];
         if (bal < amount) revert InsufficientFlex();
@@ -272,7 +288,7 @@ contract TieredStakingVault is Ownable, ReentrancyGuard {
     }
 
     // ─────────────── Stake (locked) ───────────────
-    function stakeLocked(uint256 amount, uint256 duration) external nonReentrant notPaused updateReward(msg.sender) {
+    function stakeLocked(uint256 amount, uint256 duration) external nonReentrant notPaused updateReward(msg.sender) autoDrip {
         if (amount == 0) revert ZeroAmount();
         if (duration == 0) revert InvalidDuration(); // flex goes through stake()
         uint256 mult = getMultiplierForDuration(duration);
@@ -298,7 +314,7 @@ contract TieredStakingVault is Ownable, ReentrancyGuard {
     }
 
     /// @notice Unlock one or more positions. Pass IDs in DESCENDING order to avoid reorder bugs.
-    function unlock(uint256[] calldata lockIds) external nonReentrant updateReward(msg.sender) {
+    function unlock(uint256[] calldata lockIds) external nonReentrant updateReward(msg.sender) autoDrip {
         uint256 len = lockIds.length;
         if (len == 0) revert ZeroAmount();
 
@@ -348,7 +364,7 @@ contract TieredStakingVault is Ownable, ReentrancyGuard {
     }
 
     // ─────────────── Claim ───────────────
-    function getReward() public nonReentrant updateReward(msg.sender) {
+    function getReward() public nonReentrant updateReward(msg.sender) autoDrip {
         uint256 r = rewards[msg.sender];
         if (r == 0) return;
         rewards[msg.sender] = 0;
